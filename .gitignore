@@ -1,0 +1,22 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+dist/
+.vinext/
+.next/
+.open-next/
+
+# Local data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs and editor files
+*.log
+.DS_Store
+
