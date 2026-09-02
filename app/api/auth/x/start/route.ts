@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { requireRuntimeValue } from '@/lib/runtime-env';
 import {
@@ -9,7 +10,7 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const clientId = requireRuntimeValue('X_CLIENT_ID');
     const redirectUri = requireRuntimeValue('X_REDIRECT_URI');
@@ -38,6 +39,10 @@ export async function GET() {
     };
     response.cookies.set(X_STATE_COOKIE, state, cookieOptions);
     response.cookies.set(X_VERIFIER_COOKIE, verifier, cookieOptions);
+    const returnPath = new URL(request.url).searchParams.get('return');
+    if (returnPath && /^\/s\/[A-Za-z0-9_-]{6,16}$/.test(returnPath)) {
+      response.cookies.set('stim_return', returnPath, cookieOptions);
+    }
     return response;
   } catch {
     return NextResponse.json(

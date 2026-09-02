@@ -12,7 +12,9 @@ import {
 export const dynamic = 'force-dynamic';
 
 function homeRedirect(request: NextRequest, state: string) {
-  return new URL(`/?auth=${state}`, request.url);
+  const ret = request.cookies.get('stim_return')?.value;
+  const path = ret && /^\/s\/[A-Za-z0-9_-]{6,16}$/.test(ret) ? ret : '/';
+  return new URL(`${path}?auth=${state}`, request.url);
 }
 
 export async function GET(request: NextRequest) {
@@ -22,7 +24,9 @@ export async function GET(request: NextRequest) {
   const verifier = request.cookies.get(X_VERIFIER_COOKIE)?.value;
 
   if (!code || !returnedState || !expectedState || !verifier || returnedState !== expectedState) {
-    return NextResponse.redirect(homeRedirect(request, 'invalid'));
+    const response = NextResponse.redirect(homeRedirect(request, 'invalid'));
+    response.cookies.delete('stim_return');
+    return response;
   }
 
   try {
@@ -46,11 +50,13 @@ export async function GET(request: NextRequest) {
     });
     response.cookies.delete(X_STATE_COOKIE);
     response.cookies.delete(X_VERIFIER_COOKIE);
+    response.cookies.delete('stim_return');
     return response;
   } catch {
     const response = NextResponse.redirect(homeRedirect(request, 'failed'));
     response.cookies.delete(X_STATE_COOKIE);
     response.cookies.delete(X_VERIFIER_COOKIE);
+    response.cookies.delete('stim_return');
     return response;
   }
 }

@@ -1,4 +1,7 @@
 import { getD1 } from './index';
+import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
+import type { FeedProbe } from '@/lib/rss-probe';
+import { hostFromUrl, urlsFromBookmark } from '@/lib/rss-probe';
 import type { StoredFollow } from '@/lib/x-following';
 import type { XProfile } from '@/lib/x-session';
 
@@ -113,12 +116,31 @@ export async function ensureSchema() {
       scouted_at INTEGER NOT NULL,
       PRIMARY KEY (owner_id, post_id)
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS feeds (
+      owner_id TEXT NOT NULL,
+      host TEXT NOT NULL,
+      page_url TEXT NOT NULL,
+      feeds_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL,
+      error TEXT,
+      probed_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, host)
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS shares (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      capsule_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmark_topics_owner_topic ON bookmark_topics(owner_id, topic_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_scouts_owner_scouted ON scouts(owner_id, scouted_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_follows_owner_username ON follows(owner_id, username)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_feeds_owner_status ON feeds(owner_id, status)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
   ]);
   initialized = true;
 }
@@ -585,6 +607,72 @@ export async function storeScouts(ownerId: string, finds: StoredScout[]) {
   return uniqueFinds.length;
 }
 
+export async function loadLinkHosts(ownerId: string, limit = 32) {
+  await ensureSchema();
+  const rows = await getD1().prepare(
+    'SELECT entities_json, text FROM bookmarks WHERE owner_id = ? ORDER BY synced_at DESC LIMIT 400',
+  ).bind(ownerId).all<{ entities_json: string; text: string }>();
+  const hosts = new Set<string>();
+  for (const row of rows.results) {
+    let entities: unknown = {};
+    try {
+      entities = JSON.parse(row.entities_json) as unknown;
+    } catch {
+      entities = {};
+    }
+    for (const url of urlsFromBookmark(entities, row.text)) {
+      const host = hostFromUrl(url);
+      if (host) hosts.add(host);
+      if (hosts.size >= limit) return [...hosts];
+    }
+  }
+  return [...hosts];
+}
+
+export async function storeFeed(ownerId: string, probe: FeedProbe) {
+  await ensureSchema();
+  await getD1().prepare(`INSERT INTO feeds (owner_id, host, page_url, feeds_json, status, error, probed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(owner_id, host) DO UPDATE SET
+      page_url = excluded.page_url,
+      feeds_json = excluded.feeds_json,
+      status = excluded.status,
+      error = excluded.error,
+      probed_at = excluded.probed_at`)
+    .bind(ownerId, probe.host, probe.pageUrl, JSON.stringify(probe.feeds), probe.status, probe.error ?? null, probe.probedAt)
+    .run();
+}
+
+export async function loadFeeds(ownerId: string): Promise<FeedProbe[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare(
+    'SELECT host, page_url, feeds_json, status, error, probed_at FROM feeds WHERE owner_id = ? ORDER BY probed_at DESC',
+  ).bind(ownerId).all<{
+    host: string;
+    page_url: string;
+    feeds_json: string;
+    status: FeedProbe['status'];
+    error: string | null;
+    probed_at: number;
+  }>();
+  return rows.results.map((row) => {
+    let feeds: FeedProbe['feeds'] = [];
+    try {
+      feeds = JSON.parse(row.feeds_json) as FeedProbe['feeds'];
+    } catch {
+      feeds = [];
+    }
+    return {
+      host: row.host,
+      pageUrl: row.page_url,
+      feeds: Array.isArray(feeds) ? feeds : [],
+      status: row.status,
+      error: row.error ?? undefined,
+      probedAt: row.probed_at,
+    };
+  });
+}
+
 export async function deleteOwnerData(ownerId: string) {
   await ensureSchema();
   const d1 = getD1();
@@ -594,6 +682,48 @@ export async function deleteOwnerData(ownerId: string) {
     d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
   ]);
+}
+
+export async function saveShare(id: string, ownerId: string, capsule: GraphCapsule) {
+  await ensureSchema();
+  await getD1().prepare(
+    'INSERT INTO shares (id, owner_id, name, capsule_json, created_at) VALUES (?, ?, ?, ?, ?)',
+  ).bind(id, ownerId, capsule.name, JSON.stringify(capsule), Date.now()).run();
+}
+
+export async function countSharesSince(ownerId: string, since: number) {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT COUNT(*) AS n FROM shares WHERE owner_id = ? AND created_at >= ?',
+  ).bind(ownerId, since).first<{ n: number }>();
+  return Number(row?.n ?? 0);
+}
+
+export async function loadRecentFeedHosts(ownerId: string, since: number) {
+  await ensureSchema();
+  const rows = await getD1().prepare(
+    'SELECT host FROM feeds WHERE owner_id = ? AND probed_at >= ?',
+  ).bind(ownerId, since).all<{ host: string }>();
+  return new Set(rows.results.map((row) => row.host));
+}
+
+export async function loadShare(id: string): Promise<{ id: string; ownerId: string; capsule: GraphCapsule; createdAt: number } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT id, owner_id, name, capsule_json, created_at FROM shares WHERE id = ?',
+  ).bind(id).first<{ id: string; owner_id: string; name: string; capsule_json: string; created_at: number }>();
+  if (!row) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.capsule_json) as unknown;
+  } catch {
+    return null;
+  }
+  const capsule = parseCapsule(parsed);
+  if (!capsule) return null;
+  return { id: row.id, ownerId: row.owner_id, capsule, createdAt: row.created_at };
 }

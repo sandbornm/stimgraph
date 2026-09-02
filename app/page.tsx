@@ -1,7 +1,9 @@
 'use client';
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import { readNdjson } from '@/lib/read-ndjson';
+import type { FeedProbe } from '@/lib/rss-probe';
 
 type NodeKind = 'topic' | 'person' | 'source' | 'scout';
 
@@ -27,14 +29,6 @@ type Edge = {
   kind: 'evidence' | 'affinity';
 };
 
-type GraphCapsule = {
-  version: 1;
-  name: string;
-  rootId: string | null;
-  nodes: StimNode[];
-  edges: Edge[];
-};
-
 type GraphTuning = {
   density: number;
   signalFloor: number;
@@ -46,14 +40,37 @@ type GraphTuning = {
 };
 
 const defaultTuning: GraphTuning = {
-  density: 80,
+  density: 68,
   signalFloor: 22,
-  motion: 42,
+  motion: 24,
   affinities: true,
   guides: true,
   labels: 'topics',
   palette: 'phosphor',
 };
+
+function readStoredTuning(): GraphTuning {
+  if (typeof window === 'undefined') return defaultTuning;
+  try {
+    const saved = window.localStorage.getItem('stimgraph:tuning');
+    if (!saved) return defaultTuning;
+    const value = JSON.parse(saved) as Partial<GraphTuning>;
+    const density = Number(value.density);
+    const signalFloor = Number(value.signalFloor);
+    const motion = Number(value.motion);
+    return {
+      density: Number.isFinite(density) ? Math.min(100, Math.max(20, density)) : defaultTuning.density,
+      signalFloor: Number.isFinite(signalFloor) ? Math.min(80, Math.max(8, signalFloor)) : defaultTuning.signalFloor,
+      motion: Number.isFinite(motion) ? Math.min(100, Math.max(0, motion)) : defaultTuning.motion,
+      affinities: typeof value.affinities === 'boolean' ? value.affinities : defaultTuning.affinities,
+      guides: typeof value.guides === 'boolean' ? value.guides : defaultTuning.guides,
+      labels: value.labels === 'focus' || value.labels === 'topics' || value.labels === 'all' ? value.labels : defaultTuning.labels,
+      palette: value.palette === 'spectrum' || value.palette === 'phosphor' || value.palette === 'ice' ? value.palette : defaultTuning.palette,
+    };
+  } catch {
+    return defaultTuning;
+  }
+}
 
 const tuningPresets: Array<{ name: string; value: GraphTuning }> = [
   { name: 'Quiet', value: { density: 42, signalFloor: 48, motion: 18, affinities: false, guides: false, labels: 'focus', palette: 'ice' } },
@@ -70,27 +87,44 @@ function stableFraction(value: string) {
   return (hash >>> 0) / 4294967295;
 }
 
+type ThemeName = 'dark' | 'light';
+
 function isFollowOnly(node: StimNode) {
   return node.kind === 'person' && Boolean(node.followed) && node.evidence.startsWith('Following');
 }
 
-function tunedNodeColor(node: StimNode, palette: GraphTuning['palette']) {
-  if (node.kind === 'scout') return '#7ee0ff';
-  if (node.origin === 'bridge') return '#c8ff3c';
+function darkenHex(hex: string, amount: number) {
+  const value = hex.replace('#', '');
+  if (value.length < 6) return hex;
+  const mix = (channel: string) => Math.max(0, Math.round(Number.parseInt(channel, 16) * (1 - amount))).toString(16).padStart(2, '0');
+  return `#${mix(value.slice(0, 2))}${mix(value.slice(2, 4))}${mix(value.slice(4, 6))}`;
+}
+
+function paletteLabel(palette: GraphTuning['palette']) {
+  if (palette === 'phosphor') return 'void';
+  return palette;
+}
+
+function tunedNodeColor(node: StimNode, palette: GraphTuning['palette'], theme: ThemeName = 'dark') {
+  if (node.kind === 'scout') {
+    if (palette === 'phosphor') return theme === 'light' ? '#3a4a56' : '#9aa8b4';
+    return theme === 'light' ? '#0a6a82' : '#7ee0ff';
+  }
+  if (node.origin === 'bridge') return theme === 'light' ? '#111111' : '#f2f2f0';
   const followOnly = isFollowOnly(node);
   if (palette === 'phosphor') {
-    if (node.kind === 'topic') return '#c8ff3c';
-    if (followOnly) return '#8a947c';
-    if (node.kind === 'person') return '#e8f3d8';
-    return '#6d7a62';
+    if (node.kind === 'topic') return theme === 'light' ? '#111111' : '#f2f2f0';
+    if (followOnly) return theme === 'light' ? '#6a6a66' : '#7a7a76';
+    if (node.kind === 'person') return theme === 'light' ? '#0a0a0a' : '#f2f2f0';
+    return theme === 'light' ? '#5a5a56' : '#6a6a66';
   }
   if (palette === 'ice') {
-    if (node.kind === 'topic') return '#7ee0ff';
-    if (followOnly) return '#7d93a0';
-    if (node.kind === 'person') return '#e8f7ff';
-    return '#718892';
+    if (node.kind === 'topic') return theme === 'light' ? '#0a6a82' : '#7ee0ff';
+    if (followOnly) return theme === 'light' ? '#3d5c68' : '#7d93a0';
+    if (node.kind === 'person') return theme === 'light' ? '#142028' : '#e8f7ff';
+    return theme === 'light' ? '#4a5a62' : '#718892';
   }
-  return node.color;
+  return theme === 'light' ? darkenHex(node.color, 0.38) : node.color;
 }
 
 function drawDiamond(context: CanvasRenderingContext2D, x: number, y: number, radius: number) {
@@ -176,7 +210,7 @@ function slerpSphere(from: SpherePoint, to: SpherePoint, amount: number): Sphere
 
 function hexRgba(hex: string, alpha: number) {
   const value = hex.replace('#', '');
-  if (value.length < 6) return `rgba(220, 232, 216, ${alpha})`;
+  if (value.length < 6) return `rgba(220, 220, 216, ${alpha})`;
   return `rgba(${Number.parseInt(value.slice(0, 2), 16)}, ${Number.parseInt(value.slice(2, 4), 16)}, ${Number.parseInt(value.slice(4, 6), 16)}, ${alpha})`;
 }
 
@@ -189,7 +223,7 @@ function layerRadius(node: StimNode) {
 }
 
 const demoTopicSeeds = [
-  ['Generative interfaces', '#c8ff3c', 'Interfaces that make abstract systems tangible, spatial, and responsive.'],
+  ['Generative interfaces', '#f2f2f0', 'Interfaces that make abstract systems tangible, spatial, and responsive.'],
   ['Agent ecologies', '#72e7ff', 'How many specialized agents coordinate, disagree, and hand work to one another.'],
   ['Tools for thought', '#b39cff', 'Memory, notation, and navigation systems built around relationships.'],
   ['Creative code', '#ffcf66', 'Computation used as a material for images, sound, and interaction.'],
@@ -264,10 +298,6 @@ function slug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
-function nowMs() {
-  return Date.now();
-}
-
 function randomOffset(span: number) {
   return 1 + Math.floor(Math.random() * Math.max(1, span));
 }
@@ -282,8 +312,49 @@ function matchScore(haystack: string, needle: string) {
   if (at < 0) return 0;
   if (at === 0) return 92;
   const before = hay[at - 1];
-  if (before === ' ' || before === '·' || before === '-' || before === '/' || before === '_') return 80;
+  if (before === ' ' || before === '·' || before === '-' || before === '/' || before === '_' || before === '@' || before === '#') return 80;
   return Math.max(12, 48 - Math.min(30, at));
+}
+
+function parseSearch(raw: string): { needle: string; kind: NodeKind | 'command' | null } {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('@')) return { needle: trimmed.slice(1).trim(), kind: 'person' };
+  if (trimmed.startsWith('#')) return { needle: trimmed.slice(1).trim(), kind: 'topic' };
+  if (trimmed.startsWith('*')) return { needle: trimmed.slice(1).trim(), kind: 'scout' };
+  if (trimmed.startsWith(':') || trimmed.startsWith('>')) return { needle: trimmed.slice(1).trim(), kind: 'command' };
+  return { needle: trimmed, kind: null };
+}
+
+type GuideStop = { id: string; beat: string };
+
+function buildGuideStops(nodes: StimNode[], edges: Edge[]): GuideStop[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const topics = nodes.filter((node) => node.kind === 'topic').sort((first, second) => second.size - first.size);
+  const people = nodes.filter((node) => node.kind === 'person' && !isFollowOnly(node)).sort((first, second) => second.size - first.size);
+  const bridges = nodes.filter((node) => node.origin === 'bridge');
+  const scouts = nodes.filter((node) => node.kind === 'scout');
+  const stops: GuideStop[] = [];
+  const used = new Set<string>();
+  const add = (id: string | undefined, beat: string) => {
+    if (!id || used.has(id) || !byId.has(id) || !beat) return;
+    used.add(id);
+    stops.push({ id, beat });
+  };
+  const neighbors = (id: string) => edges
+    .filter((edge) => edge.from === id || edge.to === id)
+    .map((edge) => (edge.from === id ? edge.to : edge.from));
+
+  add(topics[0]?.id, topics[0] ? `${topics[0].label} is the densest topic here.` : '');
+  if (topics[0]) {
+    const linked = people.find((person) => neighbors(topics[0].id).includes(person.id));
+    add(linked?.id, linked ? `Saves often sit near ${topics[0].label}.` : '');
+  }
+  add(topics[1]?.id, topics[1] ? `${topics[1].label} is the next cluster.` : '');
+  add(people[0]?.id, people[0] ? 'The author you save most.' : '');
+  add(bridges[0]?.id, 'This node appears on both maps.');
+  add(scouts[0]?.id, 'A suggestion, not a bookmark.');
+  add(topics[2]?.id, topics[2] ? `${topics[2].label} is farther out.` : '');
+  return stops.slice(0, 6);
 }
 
 type PaletteHit = {
@@ -323,8 +394,8 @@ function buildDemoGraph(): { nodes: StimNode[]; edges: Edge[] } {
       size: 6 + (index % 5) * 0.55 + (followed ? 0.6 : 0),
       color: '#f4f1e9',
       note: followed
-        ? `${handle} is someone you follow, and they appear near several saved threads in this fictional demo.`
-        : `${handle} appears near several saved threads in this fictional demo constellation.`,
+        ? `You follow ${handle}. They sit near several saved posts in this demo.`
+        : `${handle} sits near several saved posts in this demo.`,
       evidence: followed ? `${saved} demo bookmarks · Following` : `${saved} demo bookmarks`,
       followed,
     };
@@ -352,7 +423,7 @@ function buildDemoGraph(): { nodes: StimNode[]; edges: Edge[] } {
       y: Math.min(0.95, Math.max(0.05, anchor.y + Math.sin(angle) * distance * 0.7)),
       size: 3 + (index % 3) * 0.45,
       color: '#8f9c93',
-      note: `A fictional saved post about ${label.toLowerCase()}, included to show how bookmark evidence surrounds people and themes.`,
+      note: `A demo saved post about ${label.toLowerCase()}. Saved posts sit near their author and topics.`,
       evidence: `Saved from ${demoPeopleSeeds[personIndex][1]} · Demo data`,
     } satisfies StimNode;
   });
@@ -368,7 +439,7 @@ function buildDemoGraph(): { nodes: StimNode[]; edges: Edge[] } {
       y: Math.min(0.95, Math.max(0.05, topic.y + Math.sin(angle) * distance * 0.7)),
       size: 4.4,
       color: '#7ee0ff',
-      note: `A fictional scouted post: ${label}.`,
+      note: `A demo suggestion: ${label}.`,
       evidence: `Scouted · ${demoTopicSeeds[topicIndex][0]} · ${reason}`,
     } satisfies StimNode;
   });
@@ -437,7 +508,7 @@ const demoGraph = buildDemoGraph();
 const demoNodes = demoGraph.nodes;
 const demoEdges = demoGraph.edges;
 
-function semanticNodeKey(node: StimNode) {
+function semanticNodeKey(node: { id: string; label: string; kind: string }) {
   if (node.kind === 'topic') return `topic:${slug(node.label)}`;
   if (node.kind === 'person') {
     const handle = node.label.match(/@[a-z0-9_]+/i)?.[0].toLowerCase();
@@ -471,11 +542,24 @@ function buildDemoCapsule(): GraphCapsule {
     'person:mirafields',
     'person:theopark',
   ]);
-  const overlapNodes = demoNodes.filter((node) => overlapIds.has(node.id)).map((node) => ({ ...node, origin: 'seed' as const }));
+  const overlapNodes = demoNodes
+    .filter((node) => overlapIds.has(node.id) && (node.kind === 'topic' || node.kind === 'person'))
+    .map((node) => ({
+      id: node.id,
+      label: node.label,
+      kind: node.kind as 'topic' | 'person',
+      x: node.x,
+      y: node.y,
+      size: node.size,
+      color: node.color,
+      note: node.note,
+      evidence: 'Shared neighborhood · Bookmark text withheld',
+      origin: 'seed' as const,
+    }));
   const newNodes: StimNode[] = [
     { id: 'topic:civic-simulation', label: 'Civic simulation', kind: 'topic', x: .58, y: .32, size: 13, color: '#74b7ff', note: 'Shared models for rehearsing public choices.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
     { id: 'topic:slow-computing', label: 'Slow computing', kind: 'topic', x: .72, y: .55, size: 12, color: '#8de4bb', note: 'Software that values reflection over throughput.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
-    { id: 'topic:biodesign', label: 'Biodesign', kind: 'topic', x: .54, y: .72, size: 12, color: '#ffcf66', note: 'Design methods shaped by living systems.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
+    { id: 'topic:biodesign', label: 'Biodesign', kind: 'topic', x: .54, y: .72, size: 12, color: '#c8c4bc', note: 'Design methods shaped by living systems.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
     { id: 'person:iris-vale', label: 'Iris Vale · @irisvale', kind: 'person', x: .78, y: .26, size: 8, color: '#dce9ff', note: 'A person in the second demo neighborhood.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
     { id: 'person:maro-kim', label: 'Maro Kim · @marokim', kind: 'person', x: .86, y: .48, size: 8, color: '#dce9ff', note: 'A person in the second demo neighborhood.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
     { id: 'person:dev-ayo', label: 'Dev Ayo · @devayo', kind: 'person', x: .76, y: .76, size: 7, color: '#dce9ff', note: 'A person in the second demo neighborhood.', evidence: 'Shared neighborhood · Bookmark text withheld', origin: 'seed' },
@@ -491,7 +575,27 @@ function buildDemoCapsule(): GraphCapsule {
     { from: 'person:theopark', to: 'topic:slow-computing', weight: .42, kind: 'affinity' },
     { from: 'topic:living-archives', to: 'topic:biodesign', weight: .54, kind: 'affinity' },
   ];
-  return { version: 1, name: 'Iris’s field', rootId: 'topic:generative-interfaces', nodes: [...overlapNodes, ...newNodes], edges };
+  return {
+    version: 1,
+    name: 'Iris’s field',
+    rootId: 'topic:generative-interfaces',
+    nodes: [
+      ...overlapNodes,
+      ...newNodes.map((node) => ({
+        id: node.id,
+        label: node.label,
+        kind: node.kind as 'topic' | 'person',
+        x: node.x,
+        y: node.y,
+        size: node.size,
+        color: node.color,
+        note: node.note,
+        evidence: node.evidence,
+        origin: 'seed' as const,
+      })),
+    ],
+    edges,
+  };
 }
 
 function combineGraphs(nodes: StimNode[], edges: Edge[], capsule: GraphCapsule) {
@@ -504,14 +608,14 @@ function combineGraphs(nodes: StimNode[], edges: Edge[], capsule: GraphCapsule) 
   const nodeByKey = new Map(combinedNodes.map((node) => [semanticNodeKey(node), node]));
   const seedIdMap = new Map<string, string>();
 
-  capsule.nodes.filter((node) => node.kind !== 'source').forEach((node) => {
+  capsule.nodes.forEach((node) => {
     const key = semanticNodeKey(node);
     const existing = nodeByKey.get(key);
     if (existing) {
       existing.origin = 'bridge';
       existing.x = 0.48 + (existing.x - 0.48) * 0.22;
       existing.size = Math.min(19, existing.size * 1.22);
-      existing.color = '#d7ff72';
+      existing.color = '#f2f2f0';
       existing.evidence = `Appears in your graph and ${capsule.name}`;
       seedIdMap.set(node.id, existing.id);
       return;
@@ -550,32 +654,7 @@ function combineGraphs(nodes: StimNode[], edges: Edge[], capsule: GraphCapsule) 
   };
 }
 
-function parseCapsule(value: unknown): GraphCapsule | null {
-  if (!value || typeof value !== 'object') return null;
-  const input = value as Partial<GraphCapsule>;
-  if (input.version !== 1 || typeof input.name !== 'string' || !Array.isArray(input.nodes) || !Array.isArray(input.edges)) return null;
-  const nodes = input.nodes.slice(0, 120).filter((node): node is StimNode => Boolean(
-    node && typeof node.id === 'string' && typeof node.label === 'string' &&
-    (node.kind === 'topic' || node.kind === 'person') && typeof node.x === 'number' &&
-    typeof node.y === 'number' && typeof node.size === 'number' && typeof node.color === 'string',
-  )).map((node) => ({
-    ...node,
-    note: typeof node.note === 'string' ? node.note.slice(0, 240) : 'Shared neighborhood node.',
-    evidence: 'Shared neighborhood · Bookmark text withheld',
-    url: undefined,
-    origin: 'seed' as const,
-  }));
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  const edges = input.edges.slice(0, 360).filter((edge): edge is Edge => Boolean(
-    edge && typeof edge.from === 'string' && typeof edge.to === 'string' &&
-    nodeIds.has(edge.from) && nodeIds.has(edge.to) && typeof edge.weight === 'number' &&
-    (edge.kind === 'evidence' || edge.kind === 'affinity'),
-  )).map((edge) => ({ ...edge, weight: Math.max(0, Math.min(1, edge.weight)) }));
-  if (nodes.length === 0) return null;
-  return { version: 1, name: input.name.slice(0, 60), rootId: typeof input.rootId === 'string' ? input.rootId : null, nodes, edges };
-}
-
-function GraphCanvas({
+const GraphCanvas = memo(function GraphCanvas({
   nodes,
   edges,
   selectedId,
@@ -603,6 +682,9 @@ function GraphCanvas({
   const freshIdsRef = useRef(freshIds);
   const busyRef = useRef(busy);
   const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  const selectedIdRef = useRef(selectedId);
+  const queryRef = useRef(query);
   const frameIdsRef = useRef(frameIds);
   const hoverRef = useRef<string | null>(null);
   const cursorRef = useRef({ x: 0, y: 0, active: false });
@@ -623,7 +705,7 @@ function GraphCanvas({
   const cameraAnimRef = useRef({
     active: false,
     start: 0,
-    duration: 640,
+    duration: 720,
     fromYaw: 0,
     fromPitch: 0,
     fromZ: 1,
@@ -631,27 +713,17 @@ function GraphCanvas({
     toPitch: 0,
     toZ: 1,
   });
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     tuningRef.current = tuning;
-  }, [tuning]);
-
-  useEffect(() => {
     freshIdsRef.current = freshIds;
-  }, [freshIds]);
-
-  useEffect(() => {
     busyRef.current = busy;
-  }, [busy]);
-
-  useEffect(() => {
     nodesRef.current = nodes;
-  }, [nodes]);
-
-  useEffect(() => {
+    edgesRef.current = edges;
+    selectedIdRef.current = selectedId;
+    queryRef.current = query;
     frameIdsRef.current = frameIds;
-  }, [frameIds]);
+  }, [busy, edges, frameIds, freshIds, nodes, query, selectedId, tuning]);
 
   useEffect(() => {
     if (!frameToken) return;
@@ -680,10 +752,14 @@ function GraphCanvas({
       maxAngle = Math.max(maxAngle, Math.acos(dot));
     });
     const nextZoom = Math.min(2.2, Math.max(0.72, 0.62 / Math.max(0.22, Math.sin(maxAngle) * 1.28)));
+    const yawDelta = Math.abs(lerpAngle(rotationRef.current.yaw, face.yaw, 1) - rotationRef.current.yaw);
+    const pitchDelta = Math.abs(face.pitch - rotationRef.current.pitch);
+    const zoomDelta = Math.abs(nextZoom - zoomRef.current);
+    if (yawDelta < 0.03 && pitchDelta < 0.03 && zoomDelta < 0.04) return;
     cameraAnimRef.current = {
       active: true,
       start: performance.now(),
-      duration: 640,
+      duration: 720,
       fromYaw: rotationRef.current.yaw,
       fromPitch: rotationRef.current.pitch,
       fromZ: zoomRef.current,
@@ -692,16 +768,6 @@ function GraphCanvas({
       toZ: nextZoom,
     };
   }, [frameToken]);
-
-  const matches = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return new Set(nodes.map((node) => node.id));
-    return new Set(
-      nodes
-        .filter((node) => `${node.label} ${node.note}`.toLowerCase().includes(normalized))
-        .map((node) => node.id),
-    );
-  }, [nodes, query]);
 
   const getPoint = useCallback((node: StimNode) => {
     const globe = globeRef.current;
@@ -725,19 +791,41 @@ function GraphCanvas({
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(rect.width * ratio);
-      canvas.height = Math.round(rect.height * ratio);
+      const nextWidth = Math.round(rect.width * ratio);
+      const nextHeight = Math.round(rect.height * ratio);
+      if (
+        canvas.width === nextWidth
+        && canvas.height === nextHeight
+        && Math.abs(transformRef.current.width - rect.width) < 0.5
+        && Math.abs(transformRef.current.height - rect.height) < 0.5
+      ) {
+        transformRef.current = { left: 0, top: 0, width: rect.width, height: rect.height };
+        return;
+      }
+      canvas.width = nextWidth;
+      canvas.height = nextHeight;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       transformRef.current = { left: 0, top: 0, width: rect.width, height: rect.height };
     };
 
+    let cancelled = false;
     const draw = (time: number) => {
+      if (cancelled) return;
       if (document.hidden) return;
       const settings = tuningRef.current;
+      const nodes = nodesRef.current;
+      const edges = edgesRef.current;
+      const selectedId = selectedIdRef.current;
+      const query = queryRef.current;
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      const needle = query.trim().toLowerCase();
+      const matches = needle
+        ? new Set(nodes.filter((node) => `${node.label} ${node.note}`.toLowerCase().includes(needle)).map((node) => node.id))
+        : null;
       const camera = cameraAnimRef.current;
       if (camera.active) {
         const progress = Math.min(1, (time - camera.start) / camera.duration);
-        const ease = 1 - (1 - progress) ** 3;
+        const ease = 1 - (1 - progress) ** 4;
         rotationRef.current = {
           yaw: lerpAngle(camera.fromYaw, camera.toYaw, ease),
           pitch: camera.fromPitch + (camera.toPitch - camera.fromPitch) * ease,
@@ -755,8 +843,9 @@ function GraphCanvas({
       }
       const dt = Math.min(40, time - lastDrawRef.current);
       lastDrawRef.current = time;
+      const theme: ThemeName = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
       const { width, height } = transformRef.current;
-      const motionStrength = prefersReducedMotion ? 0 : (settings.motion / 100) * (busyRef.current ? 1.4 : 1);
+      const motionStrength = prefersReducedMotion ? 0 : (settings.motion / 100) * (busyRef.current ? 1.15 : 1) * (camera.active ? 0.2 : 1);
       if (!pointerRef.current.down && coasting) {
         rotationRef.current.yaw += velocityRef.current.yaw;
         rotationRef.current.pitch = clampPitch(rotationRef.current.pitch + velocityRef.current.pitch);
@@ -782,16 +871,25 @@ function GraphCanvas({
         const sweep = (time * 0.00022) % 1;
         const x = sweep * width;
         const wash = context.createLinearGradient(x - 120, 0, x + 120, 0);
-        wash.addColorStop(0, 'rgba(200, 255, 60, 0)');
-        wash.addColorStop(0.5, 'rgba(200, 255, 60, 0.045)');
-        wash.addColorStop(1, 'rgba(200, 255, 60, 0)');
+        const washTint = theme === 'light' ? '10, 10, 10' : '242, 242, 240';
+        wash.addColorStop(0, `rgba(${washTint}, 0)`);
+        wash.addColorStop(0.5, `rgba(${washTint}, ${theme === 'light' ? 0.06 : 0.045})`);
+        wash.addColorStop(1, `rgba(${washTint}, 0)`);
         context.fillStyle = wash;
         context.fillRect(0, 0, width, height);
       }
 
       const ice = settings.palette === 'ice';
       const phosphor = settings.palette === 'phosphor';
-      const accent = ice ? '#7ee0ff' : phosphor ? '#c8ff3c' : '#d7e4c8';
+      const accent = ice
+        ? (theme === 'light' ? '#0a6a82' : '#7ee0ff')
+        : phosphor
+          ? (theme === 'light' ? '#111111' : '#f2f2f0')
+          : (theme === 'light' ? '#1a1a1a' : '#d8d8d4');
+      const dustRgb = theme === 'light' ? '22, 22, 20' : '210, 210, 206';
+      const starRgb = theme === 'light' ? '22, 22, 20' : '232, 232, 228';
+      const labelRgb = theme === 'light' ? '18, 18, 16' : '236, 236, 232';
+      const edgeRgb = theme === 'light' ? '18, 18, 16' : '220, 220, 216';
       const cursor = cursorRef.current;
       const reach = 168;
 
@@ -806,7 +904,7 @@ function GraphCanvas({
           const drift = Math.sin(motionTime * 0.00008 + index * 1.71) * 7;
           const x = seedX * width + drift + parallaxX;
           const y = seedY * height + Math.cos(motionTime * 0.00006 + index) * 5 + parallaxY;
-          context.fillStyle = `rgba(210, 220, 200, ${0.025 + ((index * 17) % 7) * 0.006})`;
+          context.fillStyle = `rgba(${dustRgb}, ${0.025 + ((index * 17) % 7) * 0.006})`;
           context.fillRect(x, y, index % 11 === 0 ? 1.35 : 0.6, index % 11 === 0 ? 1.35 : 0.6);
         }
       }
@@ -828,10 +926,17 @@ function GraphCanvas({
         globe.cy,
         globe.radius,
       );
-      volume.addColorStop(0, ice ? 'rgba(90, 150, 170, 0.07)' : phosphor ? 'rgba(90, 130, 30, 0.06)' : 'rgba(80, 100, 80, 0.05)');
-      volume.addColorStop(0.45, 'rgba(8, 10, 12, 0.18)');
-      volume.addColorStop(0.82, 'rgba(4, 6, 8, 0.42)');
-      volume.addColorStop(1, 'rgba(2, 3, 4, 0.62)');
+      if (theme === 'light') {
+        volume.addColorStop(0, ice ? 'rgba(10, 106, 130, 0.08)' : phosphor ? 'rgba(0, 0, 0, 0.05)' : 'rgba(20, 20, 18, 0.05)');
+        volume.addColorStop(0.45, 'rgba(255, 255, 252, 0.22)');
+        volume.addColorStop(0.82, 'rgba(236, 236, 232, 0.42)');
+        volume.addColorStop(1, 'rgba(228, 228, 224, 0.58)');
+      } else {
+        volume.addColorStop(0, ice ? 'rgba(90, 150, 170, 0.07)' : phosphor ? 'rgba(255, 255, 255, 0.05)' : 'rgba(220, 220, 216, 0.04)');
+        volume.addColorStop(0.45, 'rgba(8, 8, 8, 0.22)');
+        volume.addColorStop(0.82, 'rgba(0, 0, 0, 0.55)');
+        volume.addColorStop(1, 'rgba(0, 0, 0, 0.78)');
+      }
       context.fillStyle = volume;
       context.beginPath();
       context.arc(globe.cx, globe.cy, globe.radius, 0, Math.PI * 2);
@@ -850,7 +955,7 @@ function GraphCanvas({
         const theta = golden * index;
         const star = rotateSphere({ x: Math.cos(theta) * gr, y: gy, z: Math.sin(theta) * gr }, rotationRef.current.yaw, rotationRef.current.pitch);
         if (star.z < 0.08) continue;
-        context.fillStyle = `rgba(230, 236, 220, ${0.08 + star.z * 0.18})`;
+        context.fillStyle = `rgba(${starRgb}, ${0.08 + star.z * 0.18})`;
         context.fillRect(globe.cx + star.x * globe.radius - 0.4, globe.cy + star.y * globe.radius - 0.4, star.z > 0.7 ? 1.2 : 0.7, star.z > 0.7 ? 1.2 : 0.7);
       }
 
@@ -901,7 +1006,7 @@ function GraphCanvas({
         sphereById.set(node.id, sphere);
         const scale = globe.radius * layerRadius(node);
         const depth = 0.4 + 0.6 * Math.max(0, sphere.z);
-        const amplitude = motionStrength * (node.kind === 'source' ? 2.6 : node.kind === 'person' ? 1.8 : 1.2) * depth;
+        const amplitude = motionStrength * (node.kind === 'source' ? 1.2 : node.kind === 'person' ? 0.8 : 0.5) * depth;
         let x = globe.cx + sphere.x * scale + Math.sin(motionTime * 0.00016 + index * 2.17) * amplitude;
         let y = globe.cy + sphere.y * scale + Math.cos(motionTime * 0.00012 + index * 1.37) * amplitude * 0.72;
         let reachT = 0;
@@ -921,12 +1026,12 @@ function GraphCanvas({
       projectedRef.current = animatedPoints;
 
       context.save();
-      context.globalCompositeOperation = 'lighter';
+      if (theme === 'dark') context.globalCompositeOperation = 'lighter';
       nodes.forEach((node) => {
         if (node.kind !== 'topic') return;
         const point = animatedPoints.get(node.id);
         if (!point || point.z < 0.02) return;
-        const color = tunedNodeColor(node, settings.palette);
+        const color = tunedNodeColor(node, settings.palette, theme);
         const nebula = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, 70 + node.size * 3);
         nebula.addColorStop(0, hexRgba(color, 0.07 + point.reach * 0.08));
         nebula.addColorStop(0.45, hexRgba(color, 0.03));
@@ -959,7 +1064,7 @@ function GraphCanvas({
       const focusPoint = focusId ? animatedPoints.get(focusId) : null;
       if (focusPoint && focusPoint.z > -0.08) {
         const focusedNode = focusId ? nodeById.get(focusId) : null;
-        const focusColor = focusedNode ? tunedNodeColor(focusedNode, settings.palette) : accent;
+        const focusColor = focusedNode ? tunedNodeColor(focusedNode, settings.palette, theme) : accent;
         const well = context.createRadialGradient(focusPoint.x, focusPoint.y, 0, focusPoint.x, focusPoint.y, 110);
         well.addColorStop(0, hexRgba(focusColor, 0.16));
         well.addColorStop(0.4, hexRgba(focusColor, 0.05));
@@ -996,24 +1101,24 @@ function GraphCanvas({
         const fromSphere = sphereById.get(from.id);
         const toSphere = sphereById.get(to.id);
         if (!fromSphere || !toSphere) return;
-        const searchVisible = matches.has(edge.from) || matches.has(edge.to);
+        const searchVisible = !matches || matches.has(edge.from) || matches.has(edge.to);
         const signalAlpha = edge.kind === 'affinity' ? 0.62 : 1;
-        const fromColor = tunedNodeColor(from, settings.palette);
-        const toColor = tunedNodeColor(to, settings.palette);
+        const fromColor = tunedNodeColor(from, settings.palette, theme);
+        const toColor = tunedNodeColor(to, settings.palette, theme);
         const midZ = (fromSphere.z + toSphere.z) / 2;
         const depthFade = 0.22 + 0.78 * Math.max(0, midZ);
         if (focusId && active && searchVisible) {
-          context.strokeStyle = `rgba(220, 232, 216, ${(0.1 + edge.weight * 0.18) * signalAlpha * depthFade})`;
+          context.strokeStyle = `rgba(${edgeRgb}, ${(0.1 + edge.weight * 0.18) * signalAlpha * depthFade})`;
         } else {
           const alpha = active && searchVisible ? (0.05 + edge.weight * 0.09) * signalAlpha * depthFade : 0.028 * depthFade;
-          context.strokeStyle = `rgba(214, 226, 210, ${alpha})`;
+          context.strokeStyle = `rgba(${edgeRgb}, ${alpha})`;
         }
         if (focusId && active && searchVisible && fromSphere.z > 0.08 && toSphere.z > 0.08) {
           const a = projectSpherePoint(fromSphere);
           const b = projectSpherePoint(toSphere);
           const gradient = context.createLinearGradient(a.x, a.y, b.x, b.y);
           gradient.addColorStop(0, `${fromColor}${edge.kind === 'affinity' ? '26' : '42'}`);
-          gradient.addColorStop(0.5, `rgba(220, 232, 216, ${(0.09 + edge.weight * 0.16) * signalAlpha * depthFade})`);
+          gradient.addColorStop(0.5, `rgba(${edgeRgb}, ${(0.09 + edge.weight * 0.16) * signalAlpha * depthFade})`);
           gradient.addColorStop(1, `${toColor}${edge.kind === 'affinity' ? '26' : '42'}`);
           context.strokeStyle = gradient;
         }
@@ -1063,21 +1168,21 @@ function GraphCanvas({
         const hovered = hoverRef.current === node.id;
         const selected = selectedId === node.id;
         const related = !focusId || connected.has(node.id);
-        const visible = matches.has(node.id);
+        const visible = !matches || matches.has(node.id);
         const fresh = freshIdsRef.current.has(node.id);
         const depth = 0.38 + 0.62 * Math.max(0, point.z);
         const backFade = point.z < 0 ? 0.22 + 0.2 * (point.z + 1) : 1;
         const pulse = 1 + Math.sin(motionTime * 0.0008 + index * 0.7) * (fresh || node.kind === 'scout' ? 0.16 : 0.07);
         const kindScale = node.kind === 'topic' ? 0.34 : node.kind === 'person' ? 0.3 : node.kind === 'scout' ? 0.27 : 0.24;
         const radius = Math.max(1.2, node.size * kindScale) * pulse * Math.sqrt(zoomRef.current) * depth * (1 + point.reach * 0.35) + (hovered || selected || fresh ? 1.8 : 0);
-        const nodeColor = tunedNodeColor(node, settings.palette);
+        const nodeColor = tunedNodeColor(node, settings.palette, theme);
         const inHand = point.reach > 0.18 && point.z > -0.05;
 
         context.globalAlpha = (related && visible ? 1 : visible ? 0.52 : 0.16) * backFade * (0.75 + point.reach * 0.4);
         const shouldGlow = point.z > -0.02 && (selected || hovered || fresh || inHand || node.kind === 'scout' || node.kind === 'topic' || node.origin === 'bridge');
         if (shouldGlow) {
           context.save();
-          context.globalCompositeOperation = 'lighter';
+          if (theme === 'dark') context.globalCompositeOperation = 'lighter';
           const glowSize = radius * (selected || hovered || inHand ? 7.2 : node.kind === 'topic' ? 6.2 : 4.6);
           const glow = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, glowSize);
           glow.addColorStop(0, hexRgba(nodeColor, selected || hovered || fresh ? 0.55 : inHand ? 0.32 : 0.16));
@@ -1116,7 +1221,7 @@ function GraphCanvas({
         }
 
         if ((node.kind === 'scout' || fresh) && point.z > 0.08) {
-          context.strokeStyle = node.kind === 'scout' ? 'rgba(126, 224, 255, .45)' : hexRgba(accent, 0.45);
+          context.strokeStyle = node.kind === 'scout' ? hexRgba(theme === 'light' ? '#0a6a82' : '#7ee0ff', 0.45) : hexRgba(accent, 0.45);
           context.lineWidth = 0.7;
           context.setLineDash([1.4, 3.8]);
           context.beginPath();
@@ -1143,8 +1248,8 @@ function GraphCanvas({
           context.font = `${close ? 580 : 430} ${close ? 11.5 : 9.5}px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
           context.textAlign = 'center';
           context.fillStyle = visible && related
-            ? `rgba(236, 236, 232, ${0.55 + Math.max(point.reach, close ? 0.4 : 0) * 0.4})`
-            : 'rgba(236,236,232,.32)';
+            ? `rgba(${labelRgb}, ${0.55 + Math.max(point.reach, close ? 0.4 : 0) * 0.4})`
+            : `rgba(${labelRgb},.32)`;
           const label = node.kind === 'source' && !close ? node.label.slice(0, 28) : node.label;
           context.fillText(label, point.x, point.y + radius + 14);
         }
@@ -1169,11 +1274,12 @@ function GraphCanvas({
     frameRef.current = requestAnimationFrame(draw);
 
     return () => {
+      cancelled = true;
       observer.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(frameRef.current);
     };
-  }, [edges, getPoint, matches, nodeById, nodes, query, selectedId]);
+  }, [getPoint]);
 
   const hitTest = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -1183,7 +1289,7 @@ function GraphCanvas({
     const y = clientY - rect.top;
     let hit: StimNode | null = null;
     let closest = Number.POSITIVE_INFINITY;
-    for (const node of nodes) {
+    for (const node of nodesRef.current) {
       const point = projectedRef.current.get(node.id) ?? getPoint(node);
       if (point.z < -0.28) continue;
       const distance = Math.hypot(point.x - x, point.y - y);
@@ -1194,13 +1300,13 @@ function GraphCanvas({
       }
     }
     return hit;
-  }, [getPoint, nodes]);
+  }, [getPoint]);
 
   return (
     <canvas
       ref={canvasRef}
       className="graph-canvas"
-      aria-label="Interactive globe of topics, people, bookmarks, and supplemental affinities"
+      aria-label="Interactive globe of topics, people, bookmarks, and overlap links"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         cameraAnimRef.current.active = false;
@@ -1242,6 +1348,7 @@ function GraphCanvas({
       }}
       onWheel={(event) => {
         event.preventDefault();
+        cameraAnimRef.current.active = false;
         const previousZoom = zoomRef.current;
         zoomRef.current = Math.min(2.45, Math.max(0.62, previousZoom - event.deltaY * 0.0009));
         velocityRef.current = { yaw: 0, pitch: 0 };
@@ -1263,6 +1370,16 @@ function GraphCanvas({
       tabIndex={0}
     />
   );
+});
+
+function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 12_000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  if (init.signal) {
+    if (init.signal.aborted) controller.abort();
+    else init.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => window.clearTimeout(timer));
 }
 
 type ConnectionState = {
@@ -1277,10 +1394,20 @@ type GraphResponse = {
   scope?: 'overview' | 'wide';
 };
 
-type ViewMode = 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend';
+type ViewMode = 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend' | 'feeds';
+
+type TraceKind = 'boot' | 'sync' | 'map' | 'live' | 'enrich' | 'scout' | 'rss' | 'note';
+
+type TraceEvent = {
+  id: number;
+  at: number;
+  kind: TraceKind;
+  title: string;
+  detail?: string;
+};
 
 type FieldActivity = {
-  kind: 'boot' | 'sync' | 'map' | 'live' | 'enrich' | 'scout';
+  kind: TraceKind;
   label: string;
   detail?: string;
   current?: number;
@@ -1303,7 +1430,7 @@ type SyncStreamEvent = {
 };
 
 export default function Home() {
-  const [selectedId, setSelectedId] = useState<string | null>('topic:generative-interfaces');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [connection, setConnection] = useState<ConnectionState>({ connected: false });
   const [graphNodes, setGraphNodes] = useState<StimNode[]>(demoNodes);
@@ -1314,7 +1441,11 @@ export default function Home() {
     scout_count: demoScoutSeeds.length,
     following_count: demoFollowedIndexes.size + demoFollowOnlySeeds.length,
   });
-  const [mode, setMode] = useState<'demo' | 'live'>('demo');
+  const [mode, setMode] = useState<'demo' | 'live' | 'shared'>('demo');
+  const [shareName, setShareName] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState('');
+  const [incomingShare, setIncomingShare] = useState<GraphCapsule | null>(null);
+  const [sharePath, setSharePath] = useState('');
   const [view, setView] = useState<ViewMode>('map');
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>(() => {
     if (typeof window === 'undefined') return 'idle';
@@ -1329,27 +1460,39 @@ export default function Home() {
     return '';
   });
   const [pulling, setPulling] = useState(false);
-  const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [liveInserted, setLiveInserted] = useState(0);
+  const [liveWatch, setLiveWatch] = useState(false);
+  const [liveWatchReady, setLiveWatchReady] = useState(false);
+  const [xReads, setXReads] = useState(0);
   const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   const [enrichState, setEnrichState] = useState<'idle' | 'enriching' | 'done' | 'error'>('idle');
   const [enrichMessage, setEnrichMessage] = useState('');
   const [scoutState, setScoutState] = useState<'idle' | 'scouting' | 'done' | 'error'>('idle');
   const [scoutMessage, setScoutMessage] = useState('');
   const [keepScouting, setKeepScouting] = useState(false);
-  const [clock, setClock] = useState(() => Date.now());
-  const [activity, setActivity] = useState<FieldActivity | null>({ kind: 'boot', label: 'Checking session' });
+  const [activity, setActivity] = useState<FieldActivity | null>(null);
   const [seedGraph, setSeedGraph] = useState<GraphCapsule | null>(null);
   const [fieldScope, setFieldScope] = useState<'overview' | 'wide'>('overview');
   const [neighborhoodRootId, setNeighborhoodRootId] = useState<string | null>(null);
   const [neighborhoodDepth, setNeighborhoodDepth] = useState(2);
   const [capsuleMessage, setCapsuleMessage] = useState('');
+  const [prefsReady, setPrefsReady] = useState(false);
   const [tuning, setTuning] = useState<GraphTuning>(defaultTuning);
   const [tuningOpen, setTuningOpen] = useState(false);
   const [frameToken, setFrameToken] = useState(0);
   const [frameIds, setFrameIds] = useState<string[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [theme, setTheme] = useState<ThemeName>('dark');
+  const [themeReady, setThemeReady] = useState(false);
+  const [feeds, setFeeds] = useState<FeedProbe[]>([]);
+  const [trace, setTrace] = useState<TraceEvent[]>([]);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [guideIndex, setGuideIndex] = useState(-1);
+  const [rssState, setRssState] = useState<'idle' | 'probing' | 'done' | 'error'>('idle');
+  const traceIdRef = useRef(0);
   const deferredQuery = useDeferredValue(query);
   const deferredDensity = useDeferredValue(tuning.density);
   const deferredSignalFloor = useDeferredValue(tuning.signalFloor);
@@ -1362,7 +1505,7 @@ export default function Home() {
   const peopleCount = graphNodes.filter((node) => node.kind === 'person').length;
   const sourceCount = graphNodes.filter((node) => node.kind === 'source').length;
   const scoutCount = graphNodes.filter((node) => node.kind === 'scout').length;
-  const liveState: 'off' | 'watching' | 'pulling' = mode === 'live' && connection.connected
+  const liveState: 'off' | 'watching' | 'pulling' = mode === 'live' && connection.connected && liveWatch
     ? (pulling ? 'pulling' : 'watching')
     : 'off';
   const blendedGraph = useMemo(
@@ -1416,42 +1559,57 @@ export default function Home() {
     if (view === 'blend') return blendedGraph.nodes.filter((node) => node.origin === 'bridge' || node.origin === 'seed').slice(0, 14);
     return [];
   }, [blendedGraph.nodes, graphNodes, view, visibleNodes]);
+  const guideStops = useMemo(() => buildGuideStops(graphNodes, graphEdges), [graphEdges, graphNodes]);
+  const guideStop = guideIndex >= 0 ? guideStops[guideIndex] ?? null : null;
   const paletteHits = useMemo(() => {
-    const needle = query.trim();
+    const parsed = parseSearch(query);
+    const needle = parsed.needle;
     const hits: PaletteHit[] = [];
-    graphNodes.forEach((node) => {
-      const score = Math.max(
-        matchScore(node.label, needle),
-        matchScore(node.note, needle) * 0.7,
-        matchScore(node.evidence, needle) * 0.55,
-      );
-      if (needle && score <= 0) return;
-      hits.push({
-        id: node.id,
-        label: node.label,
-        detail: node.kind === 'source' ? 'bookmark' : node.kind,
-        kind: node.kind,
-        score: needle ? score : node.size,
+    if (parsed.kind !== 'command') {
+      graphNodes.forEach((node) => {
+        if (parsed.kind && node.kind !== parsed.kind) return;
+        const score = Math.max(
+          matchScore(node.label, needle),
+          matchScore(node.note, needle) * 0.7,
+          matchScore(node.evidence, needle) * 0.55,
+        );
+        if (needle && score <= 0) return;
+        hits.push({
+          id: node.id,
+          label: node.label,
+          detail: node.kind === 'source' ? 'bookmark' : node.kind,
+          kind: node.kind,
+          score: needle ? score : node.size,
+        });
       });
-    });
-    ([
-      ['cmd:map', 'Map', 'Full field'],
-      ['cmd:people', 'People', 'Authors you save'],
-      ['cmd:threads', 'Threads', 'Topics'],
-      ['cmd:bookmarks', 'Bookmarks', 'Saved posts'],
-      ['cmd:scout', 'Scout', 'Grok finds'],
-      ['cmd:neighborhood', 'Neighborhood', 'Grow from focus'],
-      ['cmd:combine', 'Combine', 'Two graphs'],
-      ['cmd:tune', 'Tune', 'Field controls'],
-      ['cmd:rediscover', 'Rediscover', 'Jump somewhere new'],
-      ['cmd:sync', 'Sync', 'Pull bookmarks from X'],
-    ] as const).forEach(([id, label, detail]) => {
-      const score = needle ? Math.max(matchScore(label, needle), matchScore(detail, needle) * 0.6) : 8;
-      if (needle && score <= 0) return;
-      hits.push({ id, label, detail, kind: 'command', score });
-    });
+    }
+    if (!parsed.kind || parsed.kind === 'command') {
+      ([
+        ['cmd:guide', 'Guide me', 'Walk the strongest nodes'],
+        ['cmd:keys', 'Keys', 'Keyboard shortcuts'],
+        ['cmd:map', 'Map', 'Whole map'],
+        ['cmd:people', 'People', 'Authors you save'],
+        ['cmd:threads', 'Topics', 'Topics'],
+        ['cmd:bookmarks', 'Bookmarks', 'Saved posts'],
+        ['cmd:scout', 'Scout', 'Suggested posts'],
+        ['cmd:neighborhood', 'Neighborhood', 'Grow from focus'],
+        ['cmd:combine', 'Combine', 'Two graphs'],
+        ['cmd:tune', 'Tune', 'Graph controls'],
+        ['cmd:feeds', 'Feeds', 'RSS on linked sites'],
+        ['cmd:log', 'Log', 'What just happened'],
+        ['cmd:share', 'Copy link', 'Send this map'],
+        ['cmd:rediscover', 'Rediscover', 'Jump somewhere new'],
+        ['cmd:sync', 'Sync', 'Pull bookmarks from X'],
+      ] as const).forEach(([id, label, detail], order) => {
+        const score = needle
+          ? Math.max(matchScore(label, needle), matchScore(detail, needle) * 0.6)
+          : 20 - order;
+        if (needle && score <= 0) return;
+        hits.push({ id, label, detail, kind: 'command', score });
+      });
+    }
     hits.sort((first, second) => second.score - first.score || first.label.localeCompare(second.label));
-    if (!needle) {
+    if (!needle && !parsed.kind) {
       return [
         ...hits.filter((hit) => hit.kind === 'command'),
         ...hits.filter((hit) => hit.kind !== 'command').slice(0, 8),
@@ -1475,31 +1633,37 @@ export default function Home() {
     .filter((item): item is { edge: Edge; neighbor: StimNode } => Boolean(item.neighbor))
     .sort((first, second) => second.edge.weight - first.edge.weight)
     .slice(0, 8), [nodeById, renderedEdges, selectedId]);
+  const globeBusy = activity?.kind === 'sync' || activity?.kind === 'scout' || activity?.kind === 'enrich' || activity?.kind === 'rss';
+  const showInspector = Boolean(selected) || view !== 'map' || permissionsOpen;
   const stageCopy = activity?.kind === 'sync'
     ? {
-        eyebrow: 'SYNCING',
-        title: activity.current ? `${activity.current} bookmarks in.` : 'Opening your bookmarks.',
-        detail: activity.tick ?? activity.detail ?? 'Pages land as X returns them.',
+        eyebrow: 'SYNC',
+        title: activity.current ? `${activity.current} bookmarks in.` : 'Opening bookmarks.',
+        detail: activity.tick ?? activity.detail ?? 'X is sending pages of saved posts.',
       }
-    : activity?.kind === 'map' || activity?.kind === 'boot'
-      ? { eyebrow: 'LOADING', title: 'Mapping the field.', detail: activity.detail ?? activity.label }
-      : activity?.kind === 'scout'
-        ? { eyebrow: 'GROK SCOUT', title: activity.label.includes('Scouting') ? 'Searching X…' : 'New posts at the edge.', detail: activity.detail ?? 'Cyan diamonds are finds, not saves.' }
+    : activity?.kind === 'scout'
+        ? { eyebrow: 'GROK SCOUT', title: activity.label.includes('Scouting') ? 'Searching X…' : 'Suggested posts.', detail: activity.detail ?? 'Cyan diamonds are suggestions, not bookmarks.' }
         : activity?.kind === 'enrich'
-          ? { eyebrow: 'GROK', title: 'Naming the threads.', detail: activity.detail ?? activity.label }
+          ? { eyebrow: 'GROK', title: 'Naming topics.', detail: activity.detail ?? activity.label }
           : view === 'blend' && seedGraph
-            ? { eyebrow: 'COMBINED FIELD', title: `Your graph × ${seedGraph.name}`, detail: 'Shared nodes burn brighter. Each field keeps its own branches.' }
+            ? { eyebrow: 'COMBINED MAP', title: `Yours and ${seedGraph.name}`, detail: 'Matching people and topics are highlighted. Other nodes stay on their own graph.' }
             : view === 'neighborhood'
-              ? { eyebrow: `${neighborhoodDepth}-STEP NEIGHBORHOOD`, title: 'Stay with this thread.', detail: 'Grow outward one degree at a time.' }
+              ? { eyebrow: `${neighborhoodDepth}-STEP NEIGHBORHOOD`, title: 'Around this node.', detail: 'Each step adds nodes one link farther out.' }
               : view === 'people'
-                ? { eyebrow: 'PEOPLE', title: 'Who you save and follow.', detail: 'Bookmark authors sit brighter. Accounts you follow and have not saved yet stay quieter.' }
+                ? { eyebrow: 'PEOPLE', title: 'Authors and accounts you follow.', detail: 'Bookmark authors are brighter. Followed accounts with no saves are quieter.' }
                 : view === 'threads'
-                  ? { eyebrow: 'THREADS', title: 'Topics in the field.', detail: 'Diamonds are themes. Click a row to fly to one.' }
+                  ? { eyebrow: 'TOPICS', title: 'Topics on the map.', detail: 'Diamonds are topics. Click a row to fly to one.' }
                   : view === 'bookmarks'
-                    ? { eyebrow: 'BOOKMARKS', title: 'Saved posts.', detail: 'Particles around the people you keep.' }
+                    ? { eyebrow: 'BOOKMARKS', title: 'Saved posts.', detail: 'Each post sits near its author.' }
                     : view === 'scout'
-                      ? { eyebrow: 'GROK SCOUT', title: 'New posts at the edge.', detail: 'Cyan diamonds are finds, not saves.' }
-                      : { eyebrow: mode === 'live' ? 'LIVE FIELD' : 'DEMO FIELD', title: 'Stuff that interests me.', detail: 'Move through the field. Names appear where you reach. Drag to spin · scroll · /' };
+                      ? { eyebrow: 'GROK SCOUT', title: 'Suggested posts.', detail: 'Cyan diamonds are suggestions, not bookmarks.' }
+                      : activity?.kind === 'rss'
+                        ? { eyebrow: 'RSS', title: activity.label, detail: activity.detail ?? 'Looking for feed links on sites saved in bookmarks.' }
+                        : view === 'feeds'
+                          ? { eyebrow: 'RSS', title: 'Linked sites and feeds.', detail: 'Probe extracts hosts from saved posts, then looks for RSS or Atom.' }
+                          : mode === 'shared'
+                            ? { eyebrow: 'SHARED', title: shareName ?? 'A shared map.', detail: 'People and topics only. Bookmark text is not in this link. Drag to spin.' }
+                            : { eyebrow: mode === 'live' ? 'LIVE' : 'DEMO', title: 'Stuff that interests me.', detail: 'Drag to spin. G walks the map. / to search.' };
 
   const loadLiveGraph = useCallback(async (options?: { keepView?: boolean; selectId?: string | null; scope?: 'overview' | 'wide' }) => {
     const scope = options?.scope ?? fieldScopeRef.current;
@@ -1518,9 +1682,9 @@ export default function Home() {
       setNeighborhoodRootId(null);
     }
     if (options?.selectId) setSelectedId(options.selectId);
-    else if (!options?.keepView) setSelectedId(data.nodes[0]?.id ?? null);
+    else if (!options?.keepView) setSelectedId(null);
     else {
-      setSelectedId((current) => (current && data.nodes.some((node) => node.id === current) ? current : data.nodes[0]?.id ?? null));
+      setSelectedId((current) => (current && data.nodes.some((node) => node.id === current) ? current : null));
     }
     return true;
   }, []);
@@ -1530,11 +1694,72 @@ export default function Home() {
     setFrameToken((token) => token + 1);
   }, []);
 
-  const focusNode = useCallback((id: string) => {
+  const enterBlend = useCallback((localNodes: StimNode[], localEdges: Edge[], capsule: GraphCapsule) => {
+    const combined = combineGraphs(localNodes, localEdges, capsule);
+    setSeedGraph(capsule);
+    setShareName(capsule.name);
+    setIncomingShare(capsule);
+    setView('blend');
+    setSelectedId(combined.rootId);
+    setCapsuleMessage(`Combined with ${capsule.name}. Matching people and topics are highlighted.`);
+    flyTo(combined.nodes.filter((node) => node.origin === 'bridge' || node.origin === 'seed').map((node) => node.id));
+  }, [flyTo]);
+  const enterBlendRef = useRef(enterBlend);
+  useEffect(() => {
+    enterBlendRef.current = enterBlend;
+  }, [enterBlend]);
+
+  const combineIncomingWithDemo = useCallback(() => {
+    const capsule = incomingShare;
+    if (!capsule) return;
+    setGraphNodes(demoNodes);
+    setGraphEdges(demoEdges);
+    setTotals({
+      bookmark_count: demoBookmarkSeeds.length,
+      author_count: demoPeopleSeeds.length,
+      scout_count: demoScoutSeeds.length,
+      following_count: demoFollowedIndexes.size + demoFollowOnlySeeds.length,
+    });
+    setMode('demo');
+    enterBlend(demoNodes, demoEdges, capsule);
+  }, [enterBlend, incomingShare]);
+
+  const pushTrace = useCallback((kind: TraceKind, title: string, detail?: string) => {
+    const id = (traceIdRef.current += 1);
+    setTrace((current) => [{ id, at: Date.now(), kind, title, detail }, ...current].slice(0, 48));
+  }, []);
+
+  const focusNode = useCallback((id: string, options?: { keepGuide?: boolean }) => {
+    if (!options?.keepGuide) setGuideIndex(-1);
+    setPermissionsOpen(false);
     setSelectedId(id);
     const nearby = collectNeighborhoodIds(id, graphNodes, graphEdges, 1);
     flyTo([...nearby]);
   }, [flyTo, graphEdges, graphNodes]);
+
+  const handleSelect = useCallback((id: string | null) => {
+    if (id) focusNode(id);
+    else {
+      setSelectedId(null);
+      setGuideIndex(-1);
+    }
+  }, [focusNode]);
+
+  const runGuide = useCallback((delta: 1 | -1) => {
+    if (guideStops.length === 0) return;
+    setTuning((current) => (current.guides ? current : { ...current, guides: true }));
+    setView('map');
+    setPermissionsOpen(false);
+    setPaletteOpen(false);
+    setHelpOpen(false);
+    setTuningOpen(false);
+    const next = guideIndex < 0
+      ? (delta < 0 ? guideStops.length - 1 : 0)
+      : (guideIndex + delta + guideStops.length) % guideStops.length;
+    setGuideIndex(next);
+    const stop = guideStops[next];
+    if (stop) focusNode(stop.id, { keepGuide: true });
+  }, [focusNode, guideIndex, guideStops]);
 
   const markFresh = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
@@ -1551,8 +1776,8 @@ export default function Home() {
   const runScout = useCallback(async () => {
     if (syncingRef.current) return;
     setScoutState('scouting');
-    setScoutMessage('Grok is searching X against your topics…');
-    setActivity({ kind: 'scout', label: 'Scouting X', detail: 'Grok is searching against your topics' });
+    setScoutMessage('Grok is searching X using your topics…');
+    setActivity({ kind: 'scout', label: 'Scouting X', detail: 'Grok is searching X using your topics' });
     try {
       const response = await fetch('/api/scout', { method: 'POST' });
       const result = (await response.json()) as {
@@ -1574,7 +1799,7 @@ export default function Home() {
         const retention = result.zeroDataRetention ? ' · ZDR confirmed' : '';
         setScoutMessage(`${result.found} new posts on the edge · estimated $${(result.estimatedCostUsd ?? 0).toFixed(4)}${retention}`);
         setView('scout');
-        setActivity({ kind: 'scout', label: `${result.found} scouted`, detail: 'Cyan diamonds just landed' });
+        setActivity({ kind: 'scout', label: `${result.found} scouted`, detail: 'New suggestions on the map' });
       }
       window.setTimeout(() => setActivity((current) => current?.kind === 'scout' ? null : current), 2200);
     } catch (error) {
@@ -1583,6 +1808,70 @@ export default function Home() {
       setActivity(null);
     }
   }, [loadLiveGraph, markFresh]);
+
+  const probeRss = useCallback(async () => {
+    setView('feeds');
+    setTuningOpen(false);
+    setRssState('probing');
+    setActivity({ kind: 'rss', label: 'Probing sites for RSS', detail: mode === 'live' ? 'Hosts from saved posts' : 'Demo sites' });
+    try {
+      const response = await fetch('/api/rss', { method: 'POST' });
+      if (!response.ok) throw new Error('RSS probe failed.');
+      const nextFeeds: FeedProbe[] = [];
+      await readNdjson<{
+        type: 'host' | 'done' | 'error';
+        host?: string;
+        status?: FeedProbe['status'];
+        feedCount?: number;
+        feeds?: FeedProbe['feeds'];
+        title?: string;
+        pageUrl?: string;
+        error?: string;
+        probed?: number;
+        found?: number;
+        remaining?: number;
+      }>(response, (event) => {
+        if (event.type === 'error') throw new Error(event.error ?? 'RSS probe failed.');
+        if (event.type === 'host' && event.host) {
+          nextFeeds.push({
+            host: event.host,
+            pageUrl: event.pageUrl ?? `https://${event.host}`,
+            feeds: event.feeds ?? [],
+            status: event.status === 'found' || event.status === 'none' || event.status === 'error' ? event.status : 'none',
+            error: event.error,
+            probedAt: Date.now(),
+          });
+          setFeeds([...nextFeeds]);
+          setActivity({
+            kind: 'rss',
+            label: event.host,
+            current: event.probed,
+            total: (event.probed ?? 1) + (event.remaining ?? 0),
+            detail: event.status === 'found' ? `${event.feedCount} feed${event.feedCount === 1 ? '' : 's'}` : event.status,
+            tick: event.title,
+          });
+        }
+        if (event.type === 'done') {
+          setRssState('done');
+          setActivity({
+            kind: 'rss',
+            label: (event.probed ?? 0) === 0 ? 'Feeds are current' : `${event.found ?? 0} sites with feeds`,
+            detail: `${event.probed ?? 0} probed`,
+          });
+        }
+      });
+      window.setTimeout(() => setActivity((current) => current?.kind === 'rss' ? null : current), 2200);
+    } catch (error) {
+      setRssState('error');
+      setActivity(null);
+      pushTrace('rss', 'RSS probe failed', error instanceof Error ? error.message : 'RSS probe failed.');
+    }
+  }, [mode, pushTrace]);
+
+  useEffect(() => {
+    if (!activity || activity.kind === 'boot' || activity.kind === 'map') return;
+    pushTrace(activity.kind, activity.label, activity.tick ?? activity.detail);
+  }, [activity, pushTrace]);
 
   useEffect(() => {
     fieldScopeRef.current = fieldScope;
@@ -1598,24 +1887,131 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const fromPath = window.location.pathname.match(/^\/s\/([A-Za-z0-9_-]{6,16})$/);
+    const fromQuery = new URLSearchParams(window.location.search).get('s');
+    const shareId = fromPath?.[1] ?? fromQuery;
     let cancelled = false;
-    void fetch('/api/auth/x/status', { cache: 'no-store' })
-      .then((response) => response.json() as Promise<ConnectionState>)
-      .then(async (status) => {
+    const abort = new AbortController();
+    let finished = false;
+    let slowTimer = 0;
+
+    const finishBoot = () => {
+      finished = true;
+      window.clearTimeout(slowTimer);
+      if (!cancelled) {
+        setActivity((current) => (current?.kind === 'boot' || current?.kind === 'map' ? null : current));
+      }
+    };
+
+    const timedFetch = (input: RequestInfo | URL, init: RequestInit = {}) =>
+      fetchWithTimeout(input, { ...init, signal: abort.signal }, 12_000);
+
+    void (async () => {
+      try {
+        const statusResponse = await timedFetch('/api/auth/x/status', { cache: 'no-store' });
+        const status = (await statusResponse.json()) as ConnectionState;
         if (cancelled) return;
+        if (shareId) setSharePath(`/s/${shareId}`);
         setConnection(status);
-        if (status.connected) {
-          setActivity({ kind: 'map', label: 'Loading your field', detail: `@${status.profile?.username ?? 'you'}` });
-          const loaded = await loadLiveGraph();
-          if (!loaded && !cancelled) setSelectedId(null);
+
+        const graphPromise = status.connected
+          ? timedFetch('/api/graph?scope=overview', { cache: 'no-store' })
+            .then(async (graphResponse) => {
+              if (!graphResponse.ok) return null;
+              return (await graphResponse.json()) as GraphResponse;
+            })
+            .catch(() => null)
+          : Promise.resolve(null);
+
+        const sharePromise = shareId
+          ? timedFetch(`/api/share/${shareId}`, { cache: 'no-store' }).then(async (shareResponse) => {
+              const payload = (await shareResponse.json()) as { capsule?: unknown; error?: string };
+              if (!shareResponse.ok) throw new Error(payload.error ?? 'This share link could not be opened.');
+              const capsule = parseCapsule(payload.capsule);
+              if (!capsule) throw new Error('This share is empty.');
+              return capsule;
+            })
+          : Promise.resolve(null);
+
+        if (status.connected || shareId) {
+          slowTimer = window.setTimeout(() => {
+            if (cancelled || finished) return;
+            setActivity({
+              kind: 'map',
+              label: status.connected ? 'Loading your map' : 'Opening shared map',
+              detail: status.connected ? `@${status.profile?.username ?? 'you'}` : undefined,
+            });
+          }, 1200);
         }
-        if (!cancelled) setActivity(null);
-      })
-      .catch(() => {
-        if (!cancelled) setActivity(null);
-      });
-    return () => { cancelled = true; };
-  }, [loadLiveGraph]);
+
+        const [graphData, capsule] = await Promise.all([graphPromise, sharePromise]);
+        if (cancelled) return;
+
+        let mineNodes = demoNodes;
+        let mineEdges = demoEdges;
+        let mineLive = false;
+        if (graphData && graphData.nodes.length > 0) {
+          mineNodes = graphData.nodes;
+          mineEdges = graphData.edges;
+          mineLive = true;
+          setGraphNodes(graphData.nodes);
+          setGraphEdges(graphData.edges);
+          setTotals(graphData.totals);
+          setFieldScope(graphData.scope ?? 'overview');
+          setMode('live');
+        }
+
+        if (capsule) {
+          setIncomingShare(capsule);
+          setShareName(capsule.name);
+          if (mineLive) {
+            enterBlendRef.current(mineNodes, mineEdges, capsule);
+          } else {
+            setMode('shared');
+            setGraphNodes(capsule.nodes.map((node) => ({ ...node })));
+            setGraphEdges(capsule.edges);
+            setTotals({
+              bookmark_count: 0,
+              author_count: capsule.nodes.filter((node) => node.kind === 'person').length,
+              scout_count: 0,
+              following_count: 0,
+            });
+            setView('map');
+            setSelectedId(capsule.rootId);
+            setCapsuleMessage('Connect X to lay this on your map, or combine it with the demo.');
+          }
+        } else if (status.connected && !graphData) {
+          setCapsuleMessage('Your map did not load in time. Try Sync.');
+        }
+
+        if (status.connected) {
+          window.setTimeout(() => {
+            if (cancelled) return;
+            void timedFetch('/api/rss', { cache: 'no-store' })
+              .then(async (rss) => {
+                if (!rss.ok || cancelled) return;
+                const payload = (await rss.json()) as { feeds?: FeedProbe[] };
+                if (!cancelled) setFeeds(payload.feeds ?? []);
+              })
+              .catch(() => {
+                // RSS is optional; the map already painted.
+              });
+          }, 0);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof Error && error.name === 'AbortError') return;
+        if (shareId) setCapsuleMessage(error instanceof Error ? error.message : 'This share link could not be opened.');
+      } finally {
+        finishBoot();
+      }
+    })();
+    return () => {
+      cancelled = true;
+      abort.abort();
+      window.clearTimeout(slowTimer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!paletteOpen) return;
@@ -1629,12 +2025,14 @@ export default function Home() {
         event.preventDefault();
         setPaletteIndex(0);
         setPaletteOpen((open) => !open);
+        setHelpOpen(false);
         return;
       }
       if (event.key === '/' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
         event.preventDefault();
         setPaletteIndex(0);
         setPaletteOpen(true);
+        setHelpOpen(false);
         return;
       }
       if (event.key === 'Escape') {
@@ -1642,56 +2040,97 @@ export default function Home() {
           setPaletteOpen(false);
           return;
         }
-        setSelectedId(null);
+        if (helpOpen) {
+          setHelpOpen(false);
+          return;
+        }
+        if (selectedId) {
+          setSelectedId(null);
+          setGuideIndex(-1);
+          return;
+        }
+        if (permissionsOpen) {
+          setPermissionsOpen(false);
+          return;
+        }
         searchRef.current?.blur();
       }
       if (event.key.toLowerCase() === 't' && !(event.target instanceof HTMLInputElement) && !paletteOpen) {
         setTuningOpen((open) => !open);
       }
+      if (event.key.toLowerCase() === 'l' && !(event.target instanceof HTMLInputElement) && !paletteOpen) {
+        setTraceOpen((open) => !open);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [paletteOpen]);
+  }, [helpOpen, paletteOpen, permissionsOpen, selectedId]);
 
-  useEffect(() => {
-    let savedTuning: GraphTuning | null = null;
+  useLayoutEffect(() => {
+    const savedTuning = readStoredTuning();
+    const current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+    let watch = false;
     try {
-      const saved = window.localStorage.getItem('stimgraph:tuning');
-      if (!saved) return;
-      const value = JSON.parse(saved) as Partial<GraphTuning>;
-      const density = Number(value.density);
-      const signalFloor = Number(value.signalFloor);
-      const motion = Number(value.motion);
-      savedTuning = {
-        density: Number.isFinite(density) ? Math.min(100, Math.max(20, density)) : defaultTuning.density,
-        signalFloor: Number.isFinite(signalFloor) ? Math.min(80, Math.max(8, signalFloor)) : defaultTuning.signalFloor,
-        motion: Number.isFinite(motion) ? Math.min(100, Math.max(0, motion)) : defaultTuning.motion,
-        affinities: typeof value.affinities === 'boolean' ? value.affinities : defaultTuning.affinities,
-        guides: typeof value.guides === 'boolean' ? value.guides : defaultTuning.guides,
-        labels: value.labels === 'focus' || value.labels === 'topics' || value.labels === 'all' ? value.labels : defaultTuning.labels,
-        palette: value.palette === 'spectrum' || value.palette === 'phosphor' || value.palette === 'ice' ? value.palette : defaultTuning.palette,
-      };
+      watch = window.localStorage.getItem('stimgraph:liveWatch') === '1';
     } catch {
-      // A malformed device preference falls back to the balanced field.
+      // Preference is optional.
     }
-    if (!savedTuning) return;
-    const frame = window.requestAnimationFrame(() => setTuning(savedTuning));
+    const frame = window.requestAnimationFrame(() => {
+      setTuning(savedTuning);
+      setTheme(current);
+      setThemeReady(true);
+      setLiveWatch(watch);
+      setLiveWatchReady(true);
+      setPrefsReady(true);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
+    if (!prefsReady) return;
     try {
       window.localStorage.setItem('stimgraph:tuning', JSON.stringify(tuning));
     } catch {
       // Device preferences are optional; the graph still works without them.
     }
-  }, [tuning]);
+  }, [prefsReady, tuning]);
 
   useEffect(() => {
-    if (mode !== 'live' || !connection.connected) return;
+    if (!themeReady) return;
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem('stimgraph:theme', theme);
+    } catch {
+      // Theme still applies for this session if storage is blocked.
+    }
+  }, [theme, themeReady]);
+
+  useEffect(() => {
+    if (!liveWatchReady) return;
+    try {
+      window.localStorage.setItem('stimgraph:liveWatch', liveWatch ? '1' : '0');
+    } catch {
+      // Preference is optional.
+    }
+  }, [liveWatch, liveWatchReady]);
+
+  useEffect(() => {
+    if (!liveWatch || mode !== 'live' || !connection.connected) return;
     let cancelled = false;
+    let timer = 0;
+    let emptyStreak = 0;
+    let lastPull = 0;
+
+    const nextDelay = () => {
+      if (emptyStreak >= 2) return 8 * 60_000;
+      if (emptyStreak >= 1) return 3 * 60_000;
+      return 90_000;
+    };
+
     const pull = async () => {
       if (cancelled || document.hidden || syncingRef.current) return;
+      if (Date.now() - lastPull < 20_000) return;
+      lastPull = Date.now();
       setPulling(true);
       setActivity({ kind: 'live', label: 'Checking newest saves' });
       try {
@@ -1702,17 +2141,23 @@ export default function Home() {
         });
         const result = (await response.json()) as { inserted?: number; insertedIds?: string[]; error?: string };
         if (!response.ok) throw new Error(result.error ?? 'Live pull failed.');
-        setLastLiveAt(nowMs());
+        setXReads((count) => count + 1);
         if ((result.inserted ?? 0) > 0) {
+          emptyStreak = 0;
           setLiveInserted((count) => count + (result.inserted ?? 0));
           await loadLiveGraph({ keepView: true });
           markFresh((result.insertedIds ?? []).map((id) => `bookmark:${id}`));
-          setActivity({ kind: 'live', label: `${result.inserted} new saves`, detail: 'Landing on the field' });
+          setActivity({ kind: 'live', label: `${result.inserted} new saves`, detail: 'New saves on the map' });
         } else {
-          setActivity({ kind: 'live', label: 'Saves are current' });
+          emptyStreak += 1;
+          setActivity({
+            kind: 'live',
+            label: 'Saves are current',
+            detail: `Next check in ${Math.round(nextDelay() / 60_000)}m`,
+          });
         }
       } catch {
-        // Stay on the last good map; the next interval retries.
+        emptyStreak += 1;
       } finally {
         if (!cancelled) {
           setPulling(false);
@@ -1720,27 +2165,27 @@ export default function Home() {
         }
       }
     };
-    let lastPull = 0;
-    const guardedPull = async () => {
-      if (document.hidden || syncingRef.current) return;
-      if (Date.now() - lastPull < 20_000) return;
-      lastPull = Date.now();
-      await pull();
+
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(async () => {
+        await pull();
+        if (!cancelled) schedule(nextDelay());
+      }, delay);
     };
-    const interval = window.setInterval(() => { void guardedPull(); }, 90_000);
-    const startup = window.setTimeout(() => { void guardedPull(); }, 8_000);
+
+    schedule(8_000);
     const onVisible = () => {
-      if (!document.hidden) void guardedPull();
+      if (!document.hidden) void pull();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
-      window.clearTimeout(startup);
+      window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
       setPulling(false);
     };
-  }, [connection.connected, loadLiveGraph, markFresh, mode]);
+  }, [connection.connected, liveWatch, loadLiveGraph, markFresh, mode]);
 
   useEffect(() => {
     if (!keepScouting || mode !== 'live' || !connection.connected) return;
@@ -1750,15 +2195,9 @@ export default function Home() {
     return () => window.clearInterval(interval);
   }, [connection.connected, keepScouting, mode, runScout]);
 
-  useEffect(() => {
-    if (liveState === 'off' && !lastLiveAt) return;
-    const interval = window.setInterval(() => setClock(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [lastLiveAt, liveState]);
-
   const syncBookmarks = async () => {
     setSyncState('syncing');
-    setSyncMessage('Opening your bookmarks…');
+    setSyncMessage('Opening bookmarks…');
     setActivity({ kind: 'sync', label: 'Syncing bookmarks', current: 0, total: 600, detail: 'Waiting on X' });
     try {
       const response = await fetch('/api/bookmarks/sync', {
@@ -1795,31 +2234,33 @@ export default function Home() {
             label: 'Syncing bookmarks',
             current: imported,
             total: event.limit ?? 600,
-            detail: event.type === 'done' ? 'Mapping the field' : `Page ${event.page ?? 1}`,
+            detail: event.type === 'done' ? 'Building the map' : `Page ${event.page ?? 1}`,
             tick: authors || undefined,
           });
         }
         setSyncMessage(authors
           ? `${imported} in · ${inserted} new${authors ? ` · ${authors}` : ''}`
           : `${imported} bookmarks in · ${inserted} new`);
+        if (event.type === 'page' || event.type === 'following') {
+          setXReads((count) => count + 1);
+        }
         if ((event.insertedIds?.length ?? 0) > 0) {
           markFresh(event.insertedIds!.map((id) => `bookmark:${id}`));
         }
         const remap = event.type === 'done' || event.type === 'following' || event.page === 1 || ((event.page ?? 0) % 2 === 0 && event.hasMore);
         if (remap) {
-          setActivity((current) => current ? { ...current, detail: 'Mapping the field' } : current);
+          setActivity((current) => current ? { ...current, detail: 'Building the map' } : current);
           await loadLiveGraph({ keepView: true });
         }
       });
       setSyncState('done');
       setLiveInserted((count) => count + inserted);
-      setLastLiveAt(nowMs());
       setSyncMessage(followingError
         ? `${imported} bookmarks mapped · ${inserted} new. ${followingError}`
         : `${imported} bookmarks mapped · ${inserted} new · ${following} following.`);
       setActivity({
         kind: 'sync',
-        label: 'Field updated',
+        label: 'Map updated',
         current: imported,
         total: imported || 600,
         detail: followingError ? followingError : `${inserted} new saves · ${following} following`,
@@ -1835,7 +2276,7 @@ export default function Home() {
   const enrichBookmarks = async () => {
     setEnrichState('enriching');
     setEnrichMessage('Sending the next 40 bookmark texts and author handles to Grok…');
-    setActivity({ kind: 'enrich', label: 'Naming threads', detail: 'Next 40 bookmarks → Grok' });
+    setActivity({ kind: 'enrich', label: 'Naming topics', detail: 'Next 40 bookmarks → Grok' });
     try {
       const response = await fetch('/api/enrich', {
         method: 'POST',
@@ -1855,11 +2296,11 @@ export default function Home() {
       setEnrichState('done');
       if (result.analyzed === 0) {
         setEnrichMessage(result.message ?? 'No new bookmarks need enrichment.');
-        setActivity({ kind: 'enrich', label: 'Threads are current' });
+        setActivity({ kind: 'enrich', label: 'Topics are current' });
       } else {
         const retention = result.zeroDataRetention ? ' · ZDR confirmed' : '';
         setEnrichMessage(`${result.analyzed ?? 0} bookmarks gained ${result.topics ?? 0} topic links · estimated $${(result.estimatedCostUsd ?? 0).toFixed(4)}${retention}`);
-        setActivity({ kind: 'enrich', label: `${result.topics ?? 0} topic links`, detail: `${result.analyzed} bookmarks named` });
+        setActivity({ kind: 'enrich', label: `${result.topics ?? 0} topic links`, detail: `${result.analyzed} bookmarks labeled` });
       }
       window.setTimeout(() => setActivity((current) => current?.kind === 'enrich' ? null : current), 2200);
     } catch (error) {
@@ -1869,12 +2310,13 @@ export default function Home() {
     }
   };
 
-  const enterView = (nextView: ViewMode) => {
+  const enterView = useCallback((nextView: ViewMode) => {
     setTuningOpen(false);
+    setPermissionsOpen(false);
     setView(nextView);
     if (nextView === 'map') {
       setSelectedId(null);
-      flyTo(graphNodes.map((node) => node.id));
+      if (view !== 'map') flyTo(graphNodes.map((node) => node.id));
       return;
     }
     if (nextView === 'people') {
@@ -1901,23 +2343,28 @@ export default function Home() {
       flyTo(scouts.map((node) => node.id));
       return;
     }
+    if (nextView === 'feeds') {
+      setSelectedId(null);
+      flyTo(graphNodes.map((node) => node.id));
+      return;
+    }
     if (nextView === 'blend' && seedGraph) {
       const bridges = blendedGraph.nodes.filter((node) => node.origin === 'bridge' || node.origin === 'seed');
       setSelectedId(blendedGraph.rootId ?? bridges[0]?.id ?? null);
       flyTo(bridges.map((node) => node.id));
     }
-  };
+  }, [blendedGraph.nodes, blendedGraph.rootId, flyTo, graphNodes, seedGraph, view]);
 
-  const rediscover = () => {
+  const rediscover = useCallback(() => {
     if (visibleNodes.length === 0) return;
     const currentIndex = visibleNodes.findIndex((node) => node.id === selectedId);
     const offset = randomOffset(visibleNodes.length - 1);
     const next = visibleNodes[(Math.max(0, currentIndex) + offset) % visibleNodes.length];
     setSelectedId(next.id);
     flyTo([...collectNeighborhoodIds(next.id, visibleNodes, visibleEdges, 1)]);
-  };
+  }, [flyTo, selectedId, visibleEdges, visibleNodes]);
 
-  const seedNeighborhood = () => {
+  const seedNeighborhood = useCallback(() => {
     const root = selectedId ?? neighborhoodRootId ?? graphNodes.find((node) => node.kind === 'topic')?.id;
     if (!root) return;
     setTuningOpen(false);
@@ -1926,12 +2373,49 @@ export default function Home() {
     setView('neighborhood');
     setSelectedId(root);
     flyTo([...collectNeighborhoodIds(root, graphNodes, graphEdges, 2)]);
-  };
+  }, [flyTo, graphEdges, graphNodes, neighborhoodRootId, selectedId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+      if (typing || paletteOpen) return;
+      if (event.key === '?' ) {
+        event.preventDefault();
+        setHelpOpen((open) => !open);
+        return;
+      }
+      if (event.key.toLowerCase() === 'g') {
+        event.preventDefault();
+        runGuide(event.shiftKey ? -1 : 1);
+        return;
+      }
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        setGuideIndex(-1);
+        rediscover();
+        return;
+      }
+      if (event.key.toLowerCase() === 'h') {
+        event.preventDefault();
+        setGuideIndex(-1);
+        enterView('map');
+        return;
+      }
+      if (event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        seedNeighborhood();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [enterView, paletteOpen, rediscover, runGuide, seedNeighborhood]);
 
   const applyPaletteHit = (hit: PaletteHit) => {
     setPaletteOpen(false);
     if (hit.kind === 'command') {
-      if (hit.id === 'cmd:map') enterView('map');
+      if (hit.id === 'cmd:guide') runGuide(1);
+      else if (hit.id === 'cmd:keys') setHelpOpen(true);
+      else if (hit.id === 'cmd:map') enterView('map');
       else if (hit.id === 'cmd:people') enterView('people');
       else if (hit.id === 'cmd:threads') enterView('threads');
       else if (hit.id === 'cmd:bookmarks') enterView('bookmarks');
@@ -1939,10 +2423,17 @@ export default function Home() {
       else if (hit.id === 'cmd:neighborhood') seedNeighborhood();
       else if (hit.id === 'cmd:combine') {
         if (seedGraph) enterView('blend');
+        else if (incomingShare && mode === 'shared') combineIncomingWithDemo();
         else loadDemoCombination();
       } else if (hit.id === 'cmd:tune') {
         setTuningOpen(true);
         flyTo(graphNodes.map((node) => node.id));
+      } else if (hit.id === 'cmd:feeds') {
+        enterView('feeds');
+      } else if (hit.id === 'cmd:log') {
+        setTraceOpen(true);
+      } else if (hit.id === 'cmd:share') {
+        void copyShareLink();
       } else if (hit.id === 'cmd:rediscover') rediscover();
       else if (hit.id === 'cmd:sync') void syncBookmarks();
       return;
@@ -1964,18 +2455,18 @@ export default function Home() {
   };
 
   const pullWiderField = async () => {
-    setCapsuleMessage('Pulling more authors, bookmarks, and weak links into the field…');
+    setCapsuleMessage('Loading more authors, bookmarks, and weaker links…');
     try {
       const response = await fetch('/api/graph?scope=wide', { cache: 'no-store' });
-      if (!response.ok) throw new Error('The wider field could not be loaded.');
+      if (!response.ok) throw new Error('The wider map could not be loaded.');
       const data = (await response.json()) as GraphResponse;
       setGraphNodes(data.nodes);
       setGraphEdges(data.edges);
       setTotals(data.totals);
       setFieldScope('wide');
-      setCapsuleMessage(`${data.nodes.length} signals and ${data.edges.length} connections are now in view.`);
+      setCapsuleMessage(`${data.nodes.length} nodes and ${data.edges.length} links are now in view.`);
     } catch (error) {
-      setCapsuleMessage(error instanceof Error ? error.message : 'The wider field could not be loaded.');
+      setCapsuleMessage(error instanceof Error ? error.message : 'The wider map could not be loaded.');
     }
   };
 
@@ -1996,7 +2487,7 @@ export default function Home() {
     setSelectedId(graphNodes[0]?.id ?? null);
   };
 
-  const exportNeighborhood = () => {
+  const makeShareCapsule = (): GraphCapsule | null => {
     const nonBookmarkNodes = graphNodes.filter((node) => node.kind !== 'source' && node.kind !== 'scout');
     const nonBookmarkIds = new Set(nonBookmarkNodes.map((node) => node.id));
     let rootId = selectedId && nonBookmarkIds.has(selectedId) ? selectedId : null;
@@ -2007,26 +2498,40 @@ export default function Home() {
       rootId = neighborEdge ? (neighborEdge.from === selectedId ? neighborEdge.to : neighborEdge.from) : null;
     }
     rootId ??= nonBookmarkNodes[0]?.id ?? null;
-    if (!rootId) return;
+    if (!rootId) return null;
     const neighborhoodIds = collectNeighborhoodIds(rootId, graphNodes, graphEdges, 2);
     const shareNodes = nonBookmarkNodes
-      .filter((node) => neighborhoodIds.has(node.id))
+      .filter((node) => neighborhoodIds.has(node.id) && (node.kind === 'topic' || node.kind === 'person'))
       .slice(0, 80)
       .map((node) => ({
-        ...node,
-        note: 'Shared neighborhood node.',
+        id: node.id,
+        label: node.label,
+        kind: node.kind as 'topic' | 'person',
+        x: node.x,
+        y: node.y,
+        size: node.size,
+        color: node.color,
+        note: 'Shared node.',
         evidence: 'Shared structure · Bookmark text withheld',
-        url: undefined,
         origin: 'seed' as const,
       }));
     const shareIds = new Set(shareNodes.map((node) => node.id));
-    const capsule: GraphCapsule = {
+    return {
       version: 1,
-      name: mode === 'live' ? `@${connection.profile?.username ?? 'someone'}’s field` : 'A Stimgraph demo field',
+      name: mode === 'live'
+        ? `@${connection.profile?.username ?? 'someone'}’s map`
+        : mode === 'shared' && shareName
+          ? shareName
+          : 'A Stimgraph demo map',
       rootId,
       nodes: shareNodes,
       edges: graphEdges.filter((edge) => shareIds.has(edge.from) && shareIds.has(edge.to)).slice(0, 240),
     };
+  };
+
+  const exportNeighborhood = () => {
+    const capsule = makeShareCapsule();
+    if (!capsule) return;
     const blob = new Blob([JSON.stringify(capsule, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2034,7 +2539,31 @@ export default function Home() {
     link.download = `stimgraph-${slug(selected?.label ?? 'neighborhood')}.stimgraph`;
     link.click();
     URL.revokeObjectURL(url);
-    setCapsuleMessage(`Exported ${shareNodes.length} people and topics. Bookmark text stayed out.`);
+    setCapsuleMessage(`Exported ${capsule.nodes.length} people and topics. Bookmark text stayed out.`);
+  };
+
+  const copyShareLink = async () => {
+    const capsule = makeShareCapsule();
+    if (!capsule) return;
+    setCapsuleMessage('Publishing a link…');
+    try {
+      const response = await fetch('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capsule }),
+      });
+      const result = (await response.json()) as { url?: string; error?: string; nodes?: number };
+      if (!response.ok || !result.url) throw new Error(result.error ?? 'The link could not be created.');
+      setShareUrl(result.url);
+      try {
+        await navigator.clipboard.writeText(result.url);
+        setCapsuleMessage(`Link copied. ${result.nodes ?? capsule.nodes.length} people and topics · bookmark text stayed out.`);
+      } catch {
+        setCapsuleMessage(result.url);
+      }
+    } catch (error) {
+      setCapsuleMessage(error instanceof Error ? error.message : 'The link could not be created.');
+    }
   };
 
   const importNeighborhood = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2072,14 +2601,15 @@ export default function Home() {
     setActivity(null);
     setFreshIds(new Set());
     setLiveInserted(0);
-    setLastLiveAt(null);
+    setXReads(0);
     setScoutMessage('');
     setView('map');
     setSeedGraph(null);
     setFieldScope('overview');
     setNeighborhoodRootId(null);
     setCapsuleMessage('');
-    setSelectedId('topic:generative-interfaces');
+    setSelectedId(null);
+    setPermissionsOpen(false);
   };
 
   const deleteLocalData = async () => {
@@ -2107,9 +2637,9 @@ export default function Home() {
           </div>
         </div>
 
-        <button className="search-box" type="button" onClick={() => { setPaletteIndex(0); setPaletteOpen(true); }} aria-label="Search the field">
+        <button className="search-box" type="button" onClick={() => { setPaletteIndex(0); setPaletteOpen(true); setHelpOpen(false); }} aria-label="Search topics, people, and posts">
           <span aria-hidden="true">⌕</span>
-          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Search the field'}</span>
+          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Search topics, people, posts'}</span>
           <kbd>⌘K</kbd>
         </button>
 
@@ -2117,8 +2647,16 @@ export default function Home() {
           <span className={`demo-pill ${mode === 'live' ? 'live' : ''}`}>
             <i /> {mode === 'live'
               ? `${totals.bookmark_count} saved${liveInserted ? ` · +${liveInserted}` : ''}`
-              : 'Demo field'}
+              : mode === 'shared' ? (shareName ?? 'Shared') : 'Demo'}
           </span>
+          <button
+            className="theme-toggle"
+            type="button"
+            onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? 'Light' : 'Dark'}
+          </button>
           {connection.connected ? (
             <button className="connect-button sync-button" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
               {syncState === 'syncing'
@@ -2126,7 +2664,7 @@ export default function Home() {
                 : `Sync @${connection.profile?.username ?? 'X'}`}
             </button>
           ) : (
-            <a className="connect-button" href="/api/auth/x/start">Connect X</a>
+            <a className="connect-button" href={sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start'}>Connect X</a>
           )}
         </div>
       </header>
@@ -2136,17 +2674,19 @@ export default function Home() {
           <nav>
             <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>⌘</span>Map</button>
             <button className={`rail-item ${view === 'people' ? 'active' : ''}`} type="button" onClick={() => enterView('people')}><span>◎</span>People</button>
-            <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Threads</button>
+            <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Topics</button>
             <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Bookmarks</button>
             <button className={`rail-item ${view === 'scout' ? 'active' : ''}`} type="button" onClick={() => enterView('scout')}><span>⬡</span>Scout</button>
+            <button className={`rail-item ${view === 'feeds' ? 'active' : ''}`} type="button" onClick={() => enterView('feeds')}><span>⇉</span>Feeds</button>
             <button className={`rail-item ${view === 'neighborhood' ? 'active' : ''}`} type="button" onClick={seedNeighborhood}><span>⊙</span>Neighborhood</button>
             <button className={`rail-item ${view === 'blend' ? 'active' : ''}`} type="button" onClick={() => seedGraph ? enterView('blend') : loadDemoCombination()}><span>⌁</span>Combine</button>
             <button className={`rail-item ${tuningOpen ? 'active' : ''}`} type="button" onClick={() => { setTuningOpen((open) => !open); flyTo(graphNodes.map((node) => node.id)); }}><span>◌</span>Tune</button>
-            <button className="rail-item" type="button" onClick={rediscover}><span>◷</span>Rediscover</button>
+            <button className={`rail-item ${guideIndex >= 0 ? 'active' : ''}`} type="button" onClick={() => runGuide(1)}><span>◐</span>Guide</button>
+            <button className="rail-item" type="button" onClick={() => { setGuideIndex(-1); rediscover(); }}><span>◷</span>Rediscover</button>
           </nav>
 
           <div className="rail-summary">
-            <p className="eyebrow">{fieldScope === 'wide' ? 'WIDE FIELD' : 'IN THE FIELD'}</p>
+            <p className="eyebrow">{fieldScope === 'wide' ? 'WIDE MAP' : 'ON THE MAP'}</p>
             <dl>
               <div><dt>Topics</dt><dd>{topicCount}</dd></div>
               <div><dt>People</dt><dd>{peopleCount}</dd></div>
@@ -2156,9 +2696,9 @@ export default function Home() {
             </dl>
           </div>
 
-          <button className="permissions-link" type="button" onClick={() => setSelectedId(null)}>
+          <button className={`permissions-link ${permissionsOpen && !selectedId && view === 'map' ? 'active' : ''}`} type="button" onClick={() => { setSelectedId(null); setPermissionsOpen((open) => !open); }}>
             <span>◇</span>
-            <span><b>Read-only by design</b><small>See what Stimgraph can access</small></span>
+            <span><b>Read-only</b><small>Permissions and sharing</small></span>
           </button>
         </aside>
 
@@ -2176,7 +2716,7 @@ export default function Home() {
               </>
             ) : (
               <>
-                <span>{renderedNodes.length} signals</span>
+                <span>{renderedNodes.length} nodes</span>
                 <i />
                 <span>{renderedEdges.length} connections</span>
               </>
@@ -2188,11 +2728,11 @@ export default function Home() {
               : undefined}
             />
           </div>
-          <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} query={deferredQuery} tuning={viewTuning} freshIds={freshIds} busy={Boolean(activity)} frameToken={frameToken} frameIds={frameIds} onSelect={(id) => id ? focusNode(id) : setSelectedId(null)} />
+          <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} query={deferredQuery} tuning={viewTuning} freshIds={freshIds} busy={globeBusy} frameToken={frameToken} frameIds={frameIds} onSelect={handleSelect} />
           <div className={`legend ${tuning.guides ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides}>
             {view === 'blend' && seedGraph ? (
               <>
-                <span><i className="local-dot" />Your field</span>
+                <span><i className="local-dot" />Yours</span>
                 <span><i className="seed-dot" />{seedGraph.name}</span>
                 <span><i className="bridge-dot" />Shared bridge</span>
               </>
@@ -2207,10 +2747,9 @@ export default function Home() {
               </>
             )}
           </div>
-
           <section className={`tuning-deck ${tuningOpen ? 'open' : ''}`} aria-label="Graph controls" aria-hidden={!tuningOpen}>
             <div className="tuning-head">
-              <div><p className="eyebrow">FIELD CONTROL</p><h2>Tune the graph</h2></div>
+              <div><p className="eyebrow">CONTROLS</p><h2>Graph controls</h2></div>
               <button type="button" onClick={() => setTuningOpen(false)} aria-label="Close graph controls">×</button>
             </div>
             <div className="preset-row">
@@ -2233,7 +2772,7 @@ export default function Home() {
             <div className="tuning-section">
               <span>CONNECTIONS</span>
               <button className={`tuning-toggle ${tuning.affinities ? 'active' : ''}`} type="button" aria-pressed={tuning.affinities} onClick={() => setTuning((current) => ({ ...current, affinities: !current.affinities }))}>
-                <i /> Dotted patterns
+                <i /> Overlap links
               </button>
               <button className={`tuning-toggle ${tuning.guides ? 'active' : ''}`} type="button" aria-pressed={tuning.guides} onClick={() => setTuning((current) => ({ ...current, guides: !current.guides }))}>
                 <i /> Headings and legend
@@ -2244,7 +2783,7 @@ export default function Home() {
               <div className="segmented-control">
                 {(['focus', 'topics', 'all'] as const).map((labelMode) => (
                   <button className={tuning.labels === labelMode ? 'active' : ''} type="button" key={labelMode} onClick={() => setTuning((current) => ({ ...current, labels: labelMode }))}>
-                    {labelMode === 'focus' ? 'Focus' : labelMode === 'topics' ? 'Topics' : 'People too'}
+                    {labelMode === 'focus' ? 'Focus' : labelMode === 'topics' ? 'Topics' : 'All'}
                   </button>
                 ))}
               </div>
@@ -2253,8 +2792,8 @@ export default function Home() {
               <span>COLOR</span>
               <div className="palette-control">
                 {(['spectrum', 'phosphor', 'ice'] as const).map((palette) => (
-                  <button className={`${palette} ${tuning.palette === palette ? 'active' : ''}`} type="button" key={palette} onClick={() => setTuning((current) => ({ ...current, palette }))} aria-label={`${palette} colors`}>
-                    <i /><b>{palette}</b>
+                  <button className={`${palette} ${tuning.palette === palette ? 'active' : ''}`} type="button" key={palette} onClick={() => setTuning((current) => ({ ...current, palette }))} aria-label={`${paletteLabel(palette)} colors`}>
+                    <i /><b>{paletteLabel(palette)}</b>
                   </button>
                 ))}
               </div>
@@ -2265,6 +2804,7 @@ export default function Home() {
             </div>
           </section>
 
+          {showInspector ? (
           <aside className={`inspector ${selected || view !== 'map' ? 'has-selection' : ''}`} aria-live="polite">
           {selected ? (
             <>
@@ -2276,22 +2816,22 @@ export default function Home() {
                 </div>
                 <button type="button" onClick={() => setSelectedId(null)} aria-label="Close details">×</button>
               </div>
-              <div className="selected-orb" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette) } as React.CSSProperties} />
+              <div className="selected-orb" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette, theme) } as React.CSSProperties} />
               <h2>{selected.label}</h2>
               <p className="inspector-note">{selected.note}</p>
               {selected.url ? <a className="node-link" href={selected.url} target="_blank" rel="noreferrer">Open on X ↗</a> : null}
 
               <div className="focus-evidence">
-                <span>WHY IT APPEARS</span>
+                <span>WHY IT IS HERE</span>
                 <strong>{selected.evidence}</strong>
               </div>
 
-              <section className="focus-orbit" aria-label="Nearby signals">
-                <p className="eyebrow">NEARBY SIGNALS</p>
+              <section className="focus-orbit" aria-label="Nearby nodes">
+                <p className="eyebrow">NEARBY</p>
                 <div className="orbit-field">
                   <div className="orbit-ring ring-one" />
                   <div className="orbit-ring ring-two" />
-                  <div className="orbit-core" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette) } as React.CSSProperties}>
+                  <div className="orbit-core" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette, theme) } as React.CSSProperties}>
                     <i />
                     <span>focus</span>
                   </div>
@@ -2308,7 +2848,7 @@ export default function Home() {
                         />
                         <button
                           className={`orbit-node ${neighbor.kind}`}
-                          style={{ left: `${left}%`, top: `${top}%`, '--node-color': tunedNodeColor(neighbor, tuning.palette) } as React.CSSProperties}
+                          style={{ left: `${left}%`, top: `${top}%`, '--node-color': tunedNodeColor(neighbor, tuning.palette, theme) } as React.CSSProperties}
                           type="button"
                           onClick={() => focusNode(neighbor.id)}
                           aria-label={`${neighbor.label}, ${edge.kind === 'affinity' ? 'shared pattern' : `${Math.round(edge.weight * 100)} percent evidence`}`}
@@ -2325,22 +2865,26 @@ export default function Home() {
               <div className="focus-actions">
                 <button type="button" onClick={seedNeighborhood}>Grow from here</button>
                 {view === 'neighborhood' && neighborhoodDepth < 4 ? <button type="button" onClick={growNeighborhood}>+ one step</button> : null}
-                <button type="button" onClick={exportNeighborhood}>Export neighborhood</button>
-                <button type="button" onClick={() => importRef.current?.click()}>Combine a graph</button>
-                {mode === 'live' && fieldScope === 'overview' ? <button type="button" onClick={pullWiderField}>Pull wider field</button> : null}
+                <button type="button" onClick={() => void copyShareLink()}>Copy link</button>
+                <button type="button" onClick={exportNeighborhood}>Export file</button>
+                <button type="button" onClick={() => importRef.current?.click()}>Import a graph</button>
+                {mode === 'live' && fieldScope === 'overview' ? <button type="button" onClick={pullWiderField}>Load more nodes</button> : null}
+                {mode === 'shared' && incomingShare ? <button type="button" onClick={combineIncomingWithDemo}>Combine with demo</button> : null}
+                {mode === 'shared' && connection.connected ? <button type="button" onClick={() => void loadLiveGraph()}>Open my map</button> : null}
                 {seedGraph ? <button type="button" onClick={clearCombination}>Separate graphs</button> : null}
               </div>
               {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
+              {shareUrl ? <a className="node-link" href={shareUrl}>{shareUrl.replace(/^https?:\/\//, '')}</a> : null}
             </>
           ) : view !== 'map' ? (
             <div className="view-panel">
-              <p className="eyebrow">{view === 'people' ? 'PEOPLE' : view === 'threads' ? 'THREADS' : view === 'bookmarks' ? 'BOOKMARKS' : view === 'scout' ? 'GROK SCOUT' : view === 'neighborhood' ? 'NEIGHBORHOOD' : 'COMBINED FIELD'}</p>
-              <h2>{view === 'people' ? 'Who you save and follow.' : view === 'threads' ? 'Named threads.' : view === 'bookmarks' ? 'Saved posts.' : view === 'scout' ? 'Finds at the edge.' : view === 'neighborhood' ? 'This pocket of the field.' : seedGraph ? `Your graph × ${seedGraph.name}` : 'Meet another field.'}</h2>
-              <p className="inspector-note">{view === 'people' ? 'Bookmark authors first, then quieter accounts you follow. Click a row to fly the camera to them.' : view === 'threads' ? 'Themes Grok or hashtags attached to saved posts. Click a row to sit on that diamond.' : view === 'bookmarks' ? 'Recent saved posts. Open one to see why it is on the map.' : view === 'scout' ? 'Cyan diamonds are suggestions, not bookmarks. Scout searches X against your topics.' : view === 'neighborhood' ? 'Two steps out from the focus node. Grow or export this pocket.' : 'Shared people and topics burn as bridges. Bookmark text stays out of the file.'}</p>
+              <p className="eyebrow">{view === 'people' ? 'PEOPLE' : view === 'threads' ? 'TOPICS' : view === 'bookmarks' ? 'BOOKMARKS' : view === 'scout' ? 'GROK SCOUT' : view === 'neighborhood' ? 'NEIGHBORHOOD' : view === 'feeds' ? 'RSS' : 'COMBINED MAP'}</p>
+              <h2>{view === 'people' ? 'Authors and accounts you follow.' : view === 'threads' ? 'Topics.' : view === 'bookmarks' ? 'Saved posts.' : view === 'scout' ? 'Suggested posts.' : view === 'neighborhood' ? 'This neighborhood.' : view === 'feeds' ? 'Linked sites and feeds.' : seedGraph ? `Yours and ${seedGraph.name}` : 'Combine two graphs.'}</h2>
+              <p className="inspector-note">{view === 'people' ? 'Bookmark authors first, then quieter accounts you follow. Click a row to fly to them.' : view === 'threads' ? 'Topics from Grok or hashtags on saved posts. Click a row to fly to that diamond.' : view === 'bookmarks' ? 'Recent bookmarks. Open one to see why it is on the map.' : view === 'scout' ? 'Cyan diamonds are suggestions, not bookmarks. Scout searches X using your topics.' : view === 'neighborhood' ? 'Nodes within two steps of the selection. Grow or export this set.' : view === 'feeds' ? (mode === 'live' ? 'Hosts come from links inside saved posts. The probe fetches each site and looks for RSS or Atom.' : 'Demo probe of public sites. After you sync bookmarks, this uses your saved links.') : 'Matching people and topics are highlighted. Bookmark text is left out of the file.'}</p>
               {view === 'scout' && connection.connected && mode === 'live' ? (
                 <div className="view-actions">
                   <button className="ai-button scout" type="button" onClick={() => void runScout()} disabled={scoutState === 'scouting'}>
-                    {scoutState === 'scouting' ? 'Scouting X…' : 'Scout new content'}
+                    {scoutState === 'scouting' ? 'Searching X…' : 'Search X'}
                   </button>
                   {scoutMessage ? <p className={`sync-message ${scoutState}`}>{scoutMessage}</p> : null}
                 </div>
@@ -2348,7 +2892,7 @@ export default function Home() {
               {view === 'threads' && connection.connected && mode === 'live' ? (
                 <div className="view-actions">
                   <button className="ai-button" type="button" onClick={enrichBookmarks} disabled={enrichState === 'enriching'}>
-                    {enrichState === 'enriching' ? 'Finding threads…' : 'Analyze next 40 with Grok'}
+                    {enrichState === 'enriching' ? 'Naming topics…' : 'Name topics for the next 40'}
                   </button>
                   {enrichMessage ? <p className={`sync-message ${enrichState}`}>{enrichMessage}</p> : null}
                 </div>
@@ -2356,41 +2900,58 @@ export default function Home() {
               {view === 'neighborhood' ? (
                 <div className="view-actions">
                   {neighborhoodDepth < 4 ? <button className="wide-connect" type="button" onClick={growNeighborhood}>Grow one more step</button> : null}
-                  <button className="wide-connect" type="button" onClick={exportNeighborhood}>Export neighborhood</button>
+                  <button className="wide-connect" type="button" onClick={() => void copyShareLink()}>Copy link</button>
+                  <button className="wide-connect" type="button" onClick={exportNeighborhood}>Export file</button>
                 </div>
               ) : null}
               {view === 'blend' ? (
                 <div className="view-actions">
+                  <button className="wide-connect" type="button" onClick={() => void copyShareLink()}>Copy this overlap</button>
                   <button className="wide-connect" type="button" onClick={() => importRef.current?.click()}>Open .stimgraph file</button>
                   {seedGraph ? <button className="wide-connect" type="button" onClick={clearCombination}>Separate graphs</button> : null}
                 </div>
               ) : null}
+              {view === 'feeds' ? (
+                <div className="view-actions">
+                  <button className="ai-button" type="button" onClick={() => void probeRss()} disabled={rssState === 'probing'}>
+                    {rssState === 'probing' ? 'Probing sites…' : feeds.length > 0 ? 'Probe again' : 'Probe RSS'}
+                  </button>
+                </div>
+              ) : null}
+              {view === 'feeds' ? (
+                <div className="feed-list">
+                  {feeds.length === 0 ? <p className="capsule-message">{rssState === 'probing' ? 'Checking sites…' : 'No probe yet.'}</p> : feeds.map((feed) => (
+                    <div className="feed-card" key={feed.host}>
+                      <span>{feed.host}</span>
+                      <b className={`feed-status ${feed.status}`}>{feed.status}</b>
+                      {feed.feeds[0] ? <a href={feed.feeds[0].url} target="_blank" rel="noreferrer">{feed.feeds[0].type} ↗</a> : null}
+                      <small>{feed.status === 'found' ? feed.feeds.map((item) => item.title || item.type).join(' · ') : feed.error ?? 'No feed link found.'}</small>
+                    </div>
+                  ))}
+                </div>
+              ) : (
               <div className="connections-list">
                 {roster.length === 0 ? <p className="capsule-message">Nothing in this slice yet.</p> : roster.map((node) => (
                   <button type="button" key={node.id} onClick={() => focusNode(node.id)}>
-                    <i style={{ background: tunedNodeColor(node, tuning.palette) }} />
+                    <i style={{ background: tunedNodeColor(node, tuning.palette, theme) }} />
                     <span>{node.label}</span>
                     <b>{node.kind === 'source' ? 'bookmark' : isFollowOnly(node) ? 'following' : node.kind}</b>
                   </button>
                 ))}
               </div>
+              )}
               {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
             </div>
           ) : (
             <div className="permissions-panel">
               <span className="permission-icon">◇</span>
-              <p className="eyebrow">{connection.connected ? 'X CONNECTED' : 'PERMISSIONS PREVIEW'}</p>
-              <h2>{connection.connected ? `Ready, @${connection.profile?.username}.` : 'You choose what enters the map.'}</h2>
-              <p>{connection.connected
-                ? 'Your token is encrypted in an HTTP-only browser cookie. Full import still waits for Sync. Sync pulls bookmarks and who you follow. After that, this tab polls the newest 15 bookmarks every 90 seconds while it is visible. X has no bookmark webhook on this API.'
-                : 'Stimgraph asks X for five read-only permissions. It cannot post, like, follow, or change your bookmarks.'}</p>
-              <ul>
-                <li><b>Bookmarks</b><span>Read saved posts only when you press Sync</span></li>
-                <li><b>Following</b><span>Read accounts you follow, as quieter people on the globe</span></li>
-                <li><b>Posts</b><span>Read the content you saved</span></li>
-                <li><b>Profiles</b><span>Name the people in your map</span></li>
-                <li><b>Offline access</b><span>Refresh when you ask it to sync</span></li>
-              </ul>
+              <p className="eyebrow">{mode === 'shared' ? 'SHARED MAP' : connection.connected ? 'X CONNECTED' : 'PERMISSIONS'}</p>
+              <h2>{mode === 'shared' ? (shareName ?? 'A shared map.') : connection.connected ? `Ready, @${connection.profile?.username}.` : 'Connect X to map your bookmarks.'}</h2>
+              <p>{mode === 'shared'
+                ? 'People and topics only. Bookmark text is not in this link. Combine with the demo, or connect X and it will lay onto your map when you come back.'
+                : connection.connected
+                ? 'Sync pulls bookmarks and who you follow. Live watch of new saves is optional and off by default.'
+                : 'Read-only: bookmarks, following, posts, profiles. It cannot post, like, follow, or change bookmarks.'}</p>
               {connection.connected ? (
                 <button className="wide-connect" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
                   {syncState === 'syncing'
@@ -2400,20 +2961,31 @@ export default function Home() {
                     : 'Sync bookmarks and following'}
                 </button>
               ) : (
-                <a className="wide-connect" href="/api/auth/x/start">Review and connect X</a>
+                <a className="wide-connect" href={sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start'}>Review and connect X</a>
               )}
               {syncMessage ? <p className={`sync-message ${syncState}`}>{syncMessage}</p> : null}
               {syncMessage.includes('Reconnect X') ? <a className="node-link" href="/api/auth/x/start">Reconnect X to grant follows.read ↗</a> : null}
-              <small>A 600-bookmark sync is about $0.60 at <a href="https://docs.x.com/x-api/getting-started/pricing" target="_blank" rel="noreferrer">X’s current owned-read rate</a>. Bookmark text stays local until you separately approve AI enrichment.</small>
+              {connection.connected && mode === 'live' ? (
+                <button
+                  className={`tuning-toggle ${liveWatch ? 'active' : ''}`}
+                  type="button"
+                  aria-pressed={liveWatch}
+                  onClick={() => setLiveWatch((value) => !value)}
+                  style={{ marginTop: 12 }}
+                >
+                  <i /> Watch for new saves while this tab is open
+                </button>
+              ) : null}
+              <small>About $0.60 per 600 bookmarks at <a href="https://docs.x.com/x-api/getting-started/pricing" target="_blank" rel="noreferrer">X’s owned-read rate</a>. Bookmark text stays local until you approve Grok.</small>
 
               {connection.connected && mode === 'live' ? (
                 <section className="ai-consent-card" aria-label="Optional Grok enrichment">
                   <p className="eyebrow">SEPARATE AI CONSENT</p>
-                  <h3>Let Grok name the threads?</h3>
-                  <p>Only this click sends the next 40 bookmark texts and author handles to xAI. Your X token, profile token, and existing graph are never sent.</p>
+                  <h3>Send 40 bookmarks to Grok to name topics?</h3>
+                  <p>This click sends the next 40 bookmark texts and author handles to xAI. Your X token, profile token, and existing graph are never sent.</p>
                   <p>Requests use <code>store: false</code>. xAI says API content may still be retained for abuse review for up to 30 days unless your team has Zero Data Retention enabled; it is not used for training without permission.</p>
                   <button className="ai-button" type="button" onClick={enrichBookmarks} disabled={enrichState === 'enriching'}>
-                    {enrichState === 'enriching' ? 'Finding threads…' : 'Analyze next 40 with Grok'}
+                    {enrichState === 'enriching' ? 'Naming topics…' : 'Name topics for the next 40'}
                   </button>
                   {enrichMessage ? <p className={`sync-message ${enrichState}`}>{enrichMessage}</p> : null}
                   <small><a href="https://docs.x.ai/developers/pricing" target="_blank" rel="noreferrer">Current Grok rates</a>: $2/M input tokens and $6/M output tokens. A small batch is normally cents; exact usage is reported after each run.</small>
@@ -2423,10 +2995,10 @@ export default function Home() {
               {connection.connected && mode === 'live' ? (
                 <section className="ai-consent-card" aria-label="Grok scout">
                   <p className="eyebrow">GROK SCOUT</p>
-                  <h3>Hunt for posts you have not saved yet.</h3>
-                  <p>Grok searches X with <code>x_search</code> against your top topics, frequent authors, and accounts you follow. It does not send bookmark text or your X token.</p>
+                  <h3>Search X for posts you have not saved.</h3>
+                  <p>Grok searches X with <code>x_search</code> using your top topics, frequent authors, and accounts you follow. It does not send bookmark text or your X token.</p>
                   <button className="ai-button scout" type="button" onClick={() => void runScout()} disabled={scoutState === 'scouting'}>
-                    {scoutState === 'scouting' ? 'Scouting X…' : 'Scout new content'}
+                    {scoutState === 'scouting' ? 'Searching X…' : 'Search X'}
                   </button>
                   <button
                     className={`tuning-toggle ${keepScouting ? 'active' : ''}`}
@@ -2452,12 +3024,15 @@ export default function Home() {
               ) : null}
 
               <section className="sharing-card" aria-label="Combine graphs">
-                <p className="eyebrow">SEED A NEIGHBORHOOD</p>
-                <h3>See where two graphs meet.</h3>
-                <p>Export a neighborhood and send the .stimgraph file to someone else. It contains people, topics, and connection weights. Bookmark text stays out.</p>
+                <p className="eyebrow">SHARE</p>
+                <h3>Send a link.</h3>
+                <p>Copy a URL to this neighborhood. Anyone with the link can explore people, topics, and how they connect. Bookmark text is left out. You can still export a .stimgraph file.</p>
                 <div>
+                  {incomingShare && mode === 'shared' ? <button type="button" onClick={combineIncomingWithDemo}>Combine with demo</button> : null}
+                  <button type="button" onClick={() => void copyShareLink()}>Copy link to this map</button>
                   <button type="button" onClick={loadDemoCombination}>Try a second graph</button>
                   <button type="button" onClick={() => importRef.current?.click()}>Open .stimgraph file</button>
+                  <button type="button" onClick={() => void probeRss()} disabled={rssState === 'probing'}>{rssState === 'probing' ? 'Probing RSS…' : 'Probe RSS on linked sites'}</button>
                 </div>
                 {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
               </section>
@@ -2465,14 +3040,21 @@ export default function Home() {
           )}
           <input ref={importRef} className="capsule-input" type="file" accept=".stimgraph,application/json" onChange={importNeighborhood} />
           <footer className="inspiration-credit">
-            Interaction inspiration: <a href="https://x.com/poetengineer__/status/1821654144958202077" target="_blank" rel="noreferrer">Kat ⊷ the Poet Engineer’s gestural latent-space work</a>. Stimgraph’s design and implementation are original.
+            Interaction credit: <a href="https://x.com/poetengineer__/status/1821654144958202077" target="_blank" rel="noreferrer">Kat ⊷ the Poet Engineer’s gestural latent-space work</a>. Stimgraph’s design and code are original.
           </footer>
           </aside>
+          ) : null}
+          {guideStop ? (
+            <div className="demo-caption" role="status">
+              <b>Guide {guideIndex + 1}/{guideStops.length} · G next · shift+G back</b>
+              {guideStop.beat}
+            </div>
+          ) : null}
         </div>
       </section>
       {paletteOpen ? (
         <div className="palette-back" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
-          <div className="palette" role="dialog" aria-label="Search the field" onKeyDown={(event) => {
+          <div className="palette" role="dialog" aria-label="Search topics, people, and posts" onKeyDown={(event) => {
             if (event.key === 'ArrowDown') {
               event.preventDefault();
               setPaletteIndex((index) => Math.min(paletteHits.length - 1, index + 1));
@@ -2492,7 +3074,7 @@ export default function Home() {
                 ref={paletteInputRef}
                 value={query}
                 onChange={(event) => { setQuery(event.target.value); setPaletteIndex(0); }}
-                placeholder="rev, a person, a topic…"
+                placeholder="@person  #topic  :command"
                 aria-label="Filter topics, people, and posts"
                 autoComplete="off"
                 spellCheck={false}
@@ -2517,33 +3099,63 @@ export default function Home() {
               ))}
             </div>
             <div className="palette-foot">
-              <span>↑↓ move</span>
-              <span>enter open</span>
-              <span>esc close</span>
+              <span>@ people</span>
+              <span># topics</span>
+              <span>: cmds</span>
               <span className="spacer" />
               <span>{paletteHits.length} hits</span>
             </div>
           </div>
         </div>
       ) : null}
+      {helpOpen ? (
+        <div className="palette-back" onMouseDown={(event) => { if (event.target === event.currentTarget) setHelpOpen(false); }}>
+          <div className="keys-sheet" role="dialog" aria-label="Keyboard shortcuts">
+            <p className="eyebrow">KEYS</p>
+            <h2>Guide and search</h2>
+            <dl>
+              <div><dt><kbd>G</kbd></dt><dd>Walk the strongest nodes</dd></div>
+              <div><dt><kbd>⇧G</kbd></dt><dd>Previous stop</dd></div>
+              <div><dt><kbd>R</kbd></dt><dd>Jump somewhere new</dd></div>
+              <div><dt><kbd>H</kbd></dt><dd>Whole map</dd></div>
+              <div><dt><kbd>N</kbd></dt><dd>Neighborhood from focus</dd></div>
+              <div><dt><kbd>/</kbd></dt><dd>Search · @ people · # topics · : commands</dd></div>
+              <div><dt><kbd>T</kbd></dt><dd>Graph controls</dd></div>
+              <div><dt><kbd>L</kbd></dt><dd>Activity log</dd></div>
+              <div><dt><kbd>?</kbd></dt><dd>This list</dd></div>
+              <div><dt><kbd>esc</kbd></dt><dd>Close</dd></div>
+            </dl>
+            <p className="keys-note">Double-click the globe to recenter. Drag to spin. Scroll to zoom.</p>
+          </div>
+        </div>
+      ) : null}
 
+      <div className={`trace-panel ${traceOpen ? 'open' : ''}`} aria-label="Activity log">
+        {trace.length === 0 ? <p className="trace-empty">Nothing has run yet. Sync, scout, or probe RSS and the steps show here.</p> : trace.map((event) => (
+          <div className="trace-row" key={event.id}>
+            <time dateTime={new Date(event.at).toISOString()}>{new Date(event.at).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+            <b>{event.kind}</b>
+            <span>{event.detail ? `${event.title} · ${event.detail}` : event.title}</span>
+          </div>
+        ))}
+      </div>
       <footer className="status-bar">
-        <span>
+        <button className="log-toggle" type="button" onClick={() => setTraceOpen((open) => !open)} aria-pressed={traceOpen} aria-label="Toggle activity log">
           {liveState === 'off' ? <i className="idle-dot" /> : <i className="live-dot" />}
           {activity?.kind === 'sync' ? `sync ${activity.current ?? 0}/${activity.total ?? 600}`
-            : liveState === 'off' ? 'demo'
-              : liveState === 'pulling' ? 'pulling bookmarks'
-                : 'live poll 90s'}
-        </span>
+            : activity?.kind === 'rss' ? `rss ${activity.current ?? 0}/${activity.total ?? 0}`
+            : liveState === 'pulling' ? 'pulling bookmarks'
+              : liveState === 'watching' ? 'watch on'
+                : mode === 'live' ? 'watch off'
+                  : mode === 'shared' ? 'shared · log'
+                    : 'demo · log'}
+        </button>
         <span><b>{totals.bookmark_count}</b> saved</span>
         <span><b>{totals.following_count ?? 0}</b> following</span>
         <span className="scout-count"><b>{totals.scout_count ?? scoutCount}</b> scouted</span>
-        <span>{liveInserted ? `+${liveInserted} this session` : 'waiting for new saves'}</span>
-        <span>{lastLiveAt ? `last pull ${Math.max(0, Math.round((clock - lastLiveAt) / 1000))}s` : 'no pull yet'}</span>
         <span className="spacer" />
-        <span>{tuning.palette}</span>
-        <span>{renderedNodes.length} pts · {renderedEdges.length} edges</span>
-        <span>{keepScouting ? 'scout watch on' : scoutState === 'scouting' ? 'scouting' : 'scout idle'}</span>
+        <span>~{xReads} X reads</span>
+        <span>{renderedNodes.length} nodes</span>
       </footer>
     </main>
   );

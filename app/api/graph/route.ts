@@ -5,7 +5,7 @@ import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 
 export const dynamic = 'force-dynamic';
 
-const topicColors = ['#d7ff72', '#72e7ff', '#ff8f70', '#ffcf66', '#b39cff', '#8de4bb'];
+const topicColors = ['#e8e8e4', '#7ee0ff', '#ff8f70', '#b39cff', '#8de4bb', '#86b9ff'];
 
 function hashUnit(value: string, salt = 0) {
   let hash = 2166136261 + salt;
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
         kind: 'person' as const,
         ...fieldPosition(author.author_id, 'person', index, peopleCount),
         size: Math.min(13, (followed ? 5.6 : 5) + Math.sqrt(Number(author.bookmark_count)) * 1.35),
-        color: '#f4f1e9',
+        color: '#f2f2f0',
         note: followed
           ? `You follow @${author.author_username}. They authored ${author.bookmark_count} of your saved posts.`
           : `@${author.author_username} authored ${author.bookmark_count} of your saved posts. Follow the surrounding particles to see what placed them here.`,
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
       kind: 'person' as const,
       ...fieldPosition(follow.user_id, 'person', data.authors.length + index, peopleCount),
       size: 5.4,
-      color: '#8f9888',
+      color: '#7a7a76',
       note: follow.description
         ? `You follow @${follow.username}. No saved posts from them yet. ${follow.description}`
         : `You follow @${follow.username}. No saved posts from them yet.`,
@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
       x: clamp(anchor.x + Math.cos(angle) * distance, 0.045, 0.955),
       y: clamp(anchor.y + Math.sin(angle) * distance * 0.72, 0.05, 0.95),
       size: 3 + hashUnit(bookmark.post_id, 47) * 1.8,
-      color: '#96a39a',
+      color: '#6a6a66',
       note: bookmark.text.slice(0, 320),
       evidence: `Saved from @${bookmark.author_username}${bookmark.created_at ? ` · ${new Date(bookmark.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}`,
       url: `https://x.com/${bookmark.author_username}/status/${bookmark.post_id}`,

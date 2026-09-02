@@ -1,0 +1,94 @@
+{
+  "id": "stimgraph",
+  "version": 1,
+  "name": "Stimgraph",
+  "expansion": "Stuff That Interests Me",
+  "one_liner": "Maps X bookmarks as a globe of saved posts, people, topics, and the links between them.",
+  "how_to_ingest": "Read this JSON first. Watch public/demo/stimgraph-silent.mp4 with the matching beats[]. The video is silent; captions and this file carry the meaning.",
+  "demo": {
+    "video": "/demo/stimgraph-silent.mp4",
+    "duration_s": 55,
+    "silent": true,
+    "audio": false,
+    "viewport": { "width": 1440, "height": 900 },
+    "starts_in": "dark demo graph",
+    "also_shows": "light mode",
+    "stills": {
+      "dark": "/demo/dark.png",
+      "light": "/demo/light.png"
+    }
+  },
+  "what_it_shows": {
+    "topic": "Lime diamond. A named theme on saved posts.",
+    "person": "Filled dot. Bookmark author, or an account you follow.",
+    "following": "Quieter person with no saved posts yet.",
+    "bookmark": "Small particle near its author.",
+    "scout": "Cyan diamond. A suggested post, not a bookmark.",
+    "evidence_link": "Solid line. Direct bookmark evidence.",
+    "affinity_link": "Dotted line. Overlap across saves. Does not change ranking."
+  },
+  "views": [
+    { "id": "map", "label": "Map", "does": "Whole globe." },
+    { "id": "people", "label": "People", "does": "Authors and followed accounts." },
+    { "id": "threads", "label": "Topics", "does": "Topic diamonds only." },
+    { "id": "bookmarks", "label": "Bookmarks", "does": "Saved posts near authors." },
+    { "id": "scout", "label": "Scout", "does": "Grok suggestions on X." },
+    { "id": "neighborhood", "label": "Neighborhood", "does": "Nodes within N steps of the selection." },
+    { "id": "blend", "label": "Combine", "does": "Your graph plus an imported .stimgraph neighborhood." }
+  ],
+  "keyboard": {
+    "/_or_cmd_k": "Open search.",
+    "t": "Toggle graph controls.",
+    "escape": "Close search or clear selection.",
+    "arrows": "Move selection on the globe.",
+    "double_click": "Reset camera.",
+    "drag": "Spin.",
+    "scroll": "Zoom."
+  },
+  "live_behavior": {
+    "connect": "OAuth read-only: bookmark.read, follows.read, tweet.read, users.read, offline.access. No write scopes.",
+    "sync": "Pulls up to 600 bookmarks plus following. Streams pages as X returns them.",
+    "poll": "Visible live tab polls the newest 15 bookmarks every 90 seconds. X has no bookmark webhook here.",
+    "enrich": "Optional. Sends the next 40 bookmark texts and author handles to xAI. Never sends the X token. store: false.",
+    "scout": "Optional. Searches X with x_search using top topics, frequent authors, and followed accounts. Optional 12-minute repeat while the tab stays open."
+  },
+  "share_format": {
+    "file": ".stimgraph JSON",
+    "version": 1,
+    "contains": ["people", "topics", "link weights", "rootId"],
+    "excludes": ["bookmark nodes", "bookmark text", "urls"],
+    "bridge_nodes": "Matching people/topics in both graphs are highlighted."
+  },
+  "theme": {
+    "storage_key": "stimgraph:theme",
+    "values": ["dark", "light"],
+    "default": "prefers-color-scheme, else dark",
+    "tokens": {
+      "lime": { "mark": "#c8ff3c", "dark_text": "#c8ff3c", "light_text": "#3f6a00", "means": "topics, brand, bridges" },
+      "cyan": { "mark": "#7ee0ff", "dark_text": "#7ee0ff", "light_text": "#0a6a82", "means": "scout suggestions" },
+      "graph_palettes": ["spectrum", "phosphor", "ice"]
+    }
+  },
+  "code_map": {
+    "ui": "app/page.tsx",
+    "css": "app/globals.css",
+    "layout": "app/layout.tsx",
+    "graph_api": "app/api/graph/route.ts",
+    "sync": "app/api/bookmarks/sync/route.ts",
+    "scout": "app/api/scout/route.ts",
+    "enrich": "app/api/enrich/route.ts"
+  },
+  "beats": [
+    { "t": "00:00", "kicker": "What it is", "say": "Stimgraph maps X bookmarks as a globe of topics, people, and saved posts. STIM means Stuff That Interests Me." },
+    { "t": "00:04", "kicker": "Move", "say": "Drag to spin. Scroll to zoom. Hover to read names. Click a node to focus it." },
+    { "t": "00:10", "kicker": "Focus", "say": "The inspector shows why the node is here and the nodes one link away." },
+    { "t": "00:15", "kicker": "Search", "say": "Press / or click search. Jump to a person, topic, post, or command." },
+    { "t": "00:20", "kicker": "Topics", "say": "Topics are lime diamonds. Click a row to fly the camera there." },
+    { "t": "00:25", "kicker": "Scout", "say": "Cyan diamonds are Grok suggestions from X, not bookmarks." },
+    { "t": "00:30", "kicker": "Neighborhood", "say": "Grow a two-step neighborhood from the focus node. Export it as a .stimgraph file with no bookmark text." },
+    { "t": "00:35", "kicker": "Combine", "say": "Import another neighborhood. Matching people and topics become highlighted bridges." },
+    { "t": "00:40", "kicker": "Tune", "say": "Density, weakest visible link, motion, overlap links, labels, and color palettes. Saved on this device." },
+    { "t": "00:45", "kicker": "Light mode", "say": "Same lime and cyan meaning on paper. Light and dark share one token set." },
+    { "t": "00:50", "kicker": "Permissions", "say": "Connect X is read-only. Sync, Grok topic names, and scout are separate clicks." }
+  ]
+}

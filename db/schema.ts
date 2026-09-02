@@ -100,3 +100,34 @@ export const scouts = sqliteTable(
     index('idx_scouts_owner_scouted').on(table.ownerId, table.scoutedAt),
   ],
 );
+
+export const feeds = sqliteTable(
+  'feeds',
+  {
+    ownerId: text('owner_id').notNull(),
+    host: text('host').notNull(),
+    pageUrl: text('page_url').notNull(),
+    feedsJson: text('feeds_json').notNull().default('[]'),
+    status: text('status').notNull(),
+    error: text('error'),
+    probedAt: integer('probed_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.host] }),
+    index('idx_feeds_owner_status').on(table.ownerId, table.status),
+  ],
+);
+
+export const shares = sqliteTable(
+  'shares',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    name: text('name').notNull(),
+    capsuleJson: text('capsule_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('idx_shares_owner_created').on(table.ownerId, table.createdAt),
+  ],
+);
