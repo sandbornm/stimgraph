@@ -1,4 +1,5 @@
 import { getD1 } from './index';
+import type { StoredFollow } from '@/lib/x-following';
 import type { XProfile } from '@/lib/x-session';
 
 export type StoredBookmark = {
@@ -28,6 +29,18 @@ export type AiTopicAssignment = {
     reason: string;
     confidence: number;
   }>;
+};
+
+export type StoredScout = {
+  postId: string;
+  authorUsername: string;
+  authorName: string;
+  text: string;
+  url: string;
+  topicId: string;
+  topicLabel: string;
+  reason: string;
+  confidence: number;
 };
 
 let initialized = false;
@@ -76,10 +89,36 @@ export async function ensureSchema() {
       source TEXT NOT NULL,
       PRIMARY KEY (owner_id, post_id, topic_id)
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS follows (
+      owner_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      name TEXT NOT NULL,
+      profile_image_url TEXT,
+      description TEXT,
+      synced_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, user_id)
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS scouts (
+      owner_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      author_username TEXT NOT NULL,
+      author_name TEXT NOT NULL,
+      text TEXT NOT NULL,
+      url TEXT,
+      topic_id TEXT,
+      topic_label TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 70,
+      scouted_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, post_id)
+    )`),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmark_topics_owner_topic ON bookmark_topics(owner_id, topic_id)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_scouts_owner_scouted ON scouts(owner_id, scouted_at)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_follows_owner_username ON follows(owner_id, username)'),
   ]);
   initialized = true;
 }
@@ -88,16 +127,41 @@ function topicId(label: string) {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72);
 }
 
+async function existingBookmarkIds(ownerId: string, postIds: string[]) {
+  if (postIds.length === 0) return new Set<string>();
+  await ensureSchema();
+  const d1 = getD1();
+  const found = new Set<string>();
+  for (let index = 0; index < postIds.length; index += 80) {
+    const slice = postIds.slice(index, index + 80);
+    const placeholders = slice.map(() => '?').join(',');
+    const result = await d1.prepare(
+      `SELECT post_id FROM bookmarks WHERE owner_id = ? AND post_id IN (${placeholders})`,
+    ).bind(ownerId, ...slice).all<{ post_id: string }>();
+    for (const row of result.results) found.add(row.post_id);
+  }
+  return found;
+}
+
 export async function storeBookmarks({
   owner,
   bookmarks,
+  optimize = true,
+  skipUnchanged = false,
 }: {
   owner: XProfile;
   bookmarks: StoredBookmark[];
+  optimize?: boolean;
+  skipUnchanged?: boolean;
 }) {
   await ensureSchema();
   const d1 = getD1();
   const now = Date.now();
+  const already = await existingBookmarkIds(owner.id, bookmarks.map((bookmark) => bookmark.postId));
+  const insertedIds = bookmarks.filter((bookmark) => !already.has(bookmark.postId)).map((bookmark) => bookmark.postId);
+  if (skipUnchanged && insertedIds.length === 0) {
+    return { stored: bookmarks.length, inserted: 0, insertedIds };
+  }
   const statements: D1PreparedStatement[] = [
     d1.prepare(`INSERT INTO accounts (id, username, name, profile_image_url, connected_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -162,7 +226,49 @@ export async function storeBookmarks({
   for (let index = 0; index < statements.length; index += 80) {
     await d1.batch(statements.slice(index, index + 80));
   }
-  await d1.prepare('PRAGMA optimize').run();
+  if (optimize) await d1.prepare('PRAGMA optimize').run();
+  return { stored: bookmarks.length, inserted: insertedIds.length, insertedIds };
+}
+
+export async function storeFollows({
+  ownerId,
+  follows,
+}: {
+  ownerId: string;
+  follows: StoredFollow[];
+}) {
+  await ensureSchema();
+  const d1 = getD1();
+  const now = Date.now();
+  const statements: D1PreparedStatement[] = [
+    d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
+  ];
+  for (const follow of follows) {
+    statements.push(
+      d1.prepare(`INSERT INTO follows (
+        owner_id, user_id, username, name, profile_image_url, description, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_id, user_id) DO UPDATE SET
+        username = excluded.username,
+        name = excluded.name,
+        profile_image_url = excluded.profile_image_url,
+        description = excluded.description,
+        synced_at = excluded.synced_at`)
+        .bind(
+          ownerId,
+          follow.userId,
+          follow.username,
+          follow.name,
+          follow.profileImageUrl ?? null,
+          follow.description ?? null,
+          now,
+        ),
+    );
+  }
+  for (let index = 0; index < statements.length; index += 80) {
+    await d1.batch(statements.slice(index, index + 80));
+  }
+  return { stored: follows.length };
 }
 
 type AuthorRow = {
@@ -213,38 +319,62 @@ type AuthorAffinityRow = {
   shared_topics: number;
 };
 
-export async function loadGraph(ownerId: string) {
+type FollowRow = {
+  user_id: string;
+  username: string;
+  name: string;
+  profile_image_url: string | null;
+  description: string | null;
+};
+
+type ScoutRow = {
+  post_id: string;
+  author_username: string;
+  author_name: string;
+  text: string;
+  url: string | null;
+  topic_id: string | null;
+  topic_label: string;
+  reason: string;
+  confidence: number;
+  scouted_at: number;
+};
+
+export async function loadGraph(ownerId: string, scope: 'overview' | 'wide' = 'overview') {
   await ensureSchema();
   const d1 = getD1();
-  const [authors, topics, connections, bookmarkRows, bookmarkTopics, topicAffinities, authorAffinities, totals] = await d1.batch([
+  const limits = scope === 'wide'
+    ? { authors: 140, topics: 80, connections: 1200, bookmarks: 240, bookmarkTopics: 1500, topicAffinities: 300, authorAffinities: 280, scouts: 80, follows: 140 }
+    : { authors: 90, topics: 50, connections: 600, bookmarks: 160, bookmarkTopics: 800, topicAffinities: 180, authorAffinities: 160, scouts: 48, follows: 80 };
+  const [authors, topics, connections, bookmarkRows, bookmarkTopics, topicAffinities, authorAffinities, totals, scoutRows, followRows] = await d1.batch([
     d1.prepare(`SELECT author_id, author_username, author_name, author_profile_image_url,
       COUNT(*) AS bookmark_count
       FROM bookmarks WHERE owner_id = ?
       GROUP BY author_id, author_username, author_name, author_profile_image_url
-      ORDER BY bookmark_count DESC LIMIT 90`).bind(ownerId),
+      ORDER BY bookmark_count DESC LIMIT ?`).bind(ownerId, limits.authors),
     d1.prepare(`SELECT t.id, t.label, t.source, COUNT(bt.post_id) AS bookmark_count
       FROM topics t
       JOIN bookmark_topics bt ON bt.owner_id = t.owner_id AND bt.topic_id = t.id
       WHERE t.owner_id = ?
       GROUP BY t.id, t.label, t.source
-      ORDER BY bookmark_count DESC LIMIT 50`).bind(ownerId),
+      ORDER BY bookmark_count DESC LIMIT ?`).bind(ownerId, limits.topics),
     d1.prepare(`SELECT b.author_id, bt.topic_id, COUNT(*) AS connection_count
       FROM bookmarks b
       JOIN bookmark_topics bt ON bt.owner_id = b.owner_id AND bt.post_id = b.post_id
       WHERE b.owner_id = ?
       GROUP BY b.author_id, bt.topic_id
-      ORDER BY connection_count DESC LIMIT 600`).bind(ownerId),
+      ORDER BY connection_count DESC LIMIT ?`).bind(ownerId, limits.connections),
     d1.prepare(`SELECT post_id, author_id, author_username, author_name, text, created_at
       FROM bookmarks
       WHERE owner_id = ?
       ORDER BY created_at DESC, synced_at DESC
-      LIMIT 160`).bind(ownerId),
+      LIMIT ?`).bind(ownerId, limits.bookmarks),
     d1.prepare(`SELECT bt.post_id, bt.topic_id, bt.confidence
       FROM bookmark_topics bt
       JOIN bookmarks b ON b.owner_id = bt.owner_id AND b.post_id = bt.post_id
       WHERE bt.owner_id = ?
       ORDER BY b.created_at DESC, bt.confidence DESC
-      LIMIT 800`).bind(ownerId),
+      LIMIT ?`).bind(ownerId, limits.bookmarkTopics),
     d1.prepare(`SELECT
         first.topic_id AS first_topic_id,
         second.topic_id AS second_topic_id,
@@ -258,7 +388,7 @@ export async function loadGraph(ownerId: string) {
       GROUP BY first.topic_id, second.topic_id
       HAVING COUNT(*) >= 1
       ORDER BY shared_bookmarks DESC
-      LIMIT 180`).bind(ownerId),
+      LIMIT ?`).bind(ownerId, limits.topicAffinities),
     d1.prepare(`WITH author_topics AS (
         SELECT b.author_id, bt.topic_id
         FROM bookmarks b
@@ -277,8 +407,20 @@ export async function loadGraph(ownerId: string) {
       GROUP BY first.author_id, second.author_id
       HAVING COUNT(*) >= 1
       ORDER BY shared_topics DESC
-      LIMIT 160`).bind(ownerId),
-    d1.prepare('SELECT COUNT(*) AS bookmark_count, COUNT(DISTINCT author_id) AS author_count FROM bookmarks WHERE owner_id = ?').bind(ownerId),
+      LIMIT ?`).bind(ownerId, limits.authorAffinities),
+    d1.prepare(`SELECT
+        (SELECT COUNT(*) FROM bookmarks WHERE owner_id = ?) AS bookmark_count,
+        (SELECT COUNT(DISTINCT author_id) FROM bookmarks WHERE owner_id = ?) AS author_count,
+        (SELECT COUNT(*) FROM scouts WHERE owner_id = ?) AS scout_count,
+        (SELECT COUNT(*) FROM follows WHERE owner_id = ?) AS following_count`)
+      .bind(ownerId, ownerId, ownerId, ownerId),
+    d1.prepare(`SELECT post_id, author_username, author_name, text, url, topic_id, topic_label, reason, confidence, scouted_at
+      FROM scouts WHERE owner_id = ?
+      ORDER BY scouted_at DESC LIMIT ?`).bind(ownerId, limits.scouts),
+    d1.prepare(`SELECT user_id, username, name, profile_image_url, description
+      FROM follows WHERE owner_id = ?
+      ORDER BY username COLLATE NOCASE
+      LIMIT ?`).bind(ownerId, limits.follows),
   ]);
 
   return {
@@ -289,9 +431,13 @@ export async function loadGraph(ownerId: string) {
     bookmarkTopics: bookmarkTopics.results as unknown as BookmarkTopicRow[],
     topicAffinities: topicAffinities.results as unknown as TopicAffinityRow[],
     authorAffinities: authorAffinities.results as unknown as AuthorAffinityRow[],
-    totals: (totals.results[0] ?? { bookmark_count: 0, author_count: 0 }) as {
-      bookmark_count: number;
-      author_count: number;
+    scouts: scoutRows.results as unknown as ScoutRow[],
+    follows: followRows.results as unknown as FollowRow[],
+    totals: {
+      bookmark_count: Number((totals.results[0] as { bookmark_count?: number; author_count?: number; scout_count?: number; following_count?: number } | undefined)?.bookmark_count ?? 0),
+      author_count: Number((totals.results[0] as { bookmark_count?: number; author_count?: number; scout_count?: number; following_count?: number } | undefined)?.author_count ?? 0),
+      scout_count: Number((totals.results[0] as { bookmark_count?: number; author_count?: number; scout_count?: number; following_count?: number } | undefined)?.scout_count ?? 0),
+      following_count: Number((totals.results[0] as { bookmark_count?: number; author_count?: number; scout_count?: number; following_count?: number } | undefined)?.following_count ?? 0),
     },
   };
 }
@@ -355,6 +501,90 @@ export async function storeAiTopics(ownerId: string, assignments: AiTopicAssignm
   return statements.length / 2;
 }
 
+export async function loadScoutContext(ownerId: string) {
+  await ensureSchema();
+  const d1 = getD1();
+  const [topics, authors, follows, bookmarks, scouts] = await d1.batch([
+    d1.prepare(`SELECT t.id, t.label
+      FROM topics t
+      JOIN bookmark_topics bt ON bt.owner_id = t.owner_id AND bt.topic_id = t.id
+      WHERE t.owner_id = ?
+      GROUP BY t.id, t.label
+      ORDER BY COUNT(bt.post_id) DESC LIMIT 10`).bind(ownerId),
+    d1.prepare(`SELECT author_username
+      FROM bookmarks WHERE owner_id = ?
+      GROUP BY author_username
+      ORDER BY COUNT(*) DESC LIMIT 12`).bind(ownerId),
+    d1.prepare(`SELECT username FROM follows WHERE owner_id = ? ORDER BY username COLLATE NOCASE LIMIT 8`).bind(ownerId),
+    d1.prepare(`SELECT post_id FROM bookmarks WHERE owner_id = ? ORDER BY synced_at DESC LIMIT 80`).bind(ownerId),
+    d1.prepare(`SELECT post_id FROM scouts WHERE owner_id = ? ORDER BY scouted_at DESC LIMIT 80`).bind(ownerId),
+  ]);
+  return {
+    topics: topics.results as unknown as Array<{ id: string; label: string }>,
+    authors: [...new Set([
+      ...(authors.results as unknown as Array<{ author_username: string }>).map((row) => row.author_username),
+      ...(follows.results as unknown as Array<{ username: string }>).map((row) => row.username),
+    ])],
+    knownPostIds: [
+      ...(bookmarks.results as unknown as Array<{ post_id: string }>).map((row) => row.post_id),
+      ...(scouts.results as unknown as Array<{ post_id: string }>).map((row) => row.post_id),
+    ],
+  };
+}
+
+export async function storeScouts(ownerId: string, finds: StoredScout[]) {
+  await ensureSchema();
+  const alreadySaved = await existingBookmarkIds(ownerId, finds.map((find) => find.postId));
+  const uniqueFinds = finds.filter((find) => !alreadySaved.has(find.postId));
+  const d1 = getD1();
+  const now = Date.now();
+  const statements: D1PreparedStatement[] = [];
+  for (const find of uniqueFinds) {
+    const topicIdValue = find.topicId || topicId(find.topicLabel);
+    if (topicIdValue) {
+      statements.push(
+        d1.prepare(`INSERT INTO topics (owner_id, id, label, source, created_at)
+          VALUES (?, ?, ?, 'scout', ?)
+          ON CONFLICT(owner_id, id) DO UPDATE SET label = excluded.label`)
+          .bind(ownerId, topicIdValue, find.topicLabel, now),
+      );
+    }
+    statements.push(
+      d1.prepare(`INSERT INTO scouts (
+        owner_id, post_id, author_username, author_name, text, url,
+        topic_id, topic_label, reason, confidence, scouted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(owner_id, post_id) DO UPDATE SET
+        author_username = excluded.author_username,
+        author_name = excluded.author_name,
+        text = excluded.text,
+        url = excluded.url,
+        topic_id = excluded.topic_id,
+        topic_label = excluded.topic_label,
+        reason = excluded.reason,
+        confidence = excluded.confidence,
+        scouted_at = excluded.scouted_at`)
+        .bind(
+          ownerId,
+          find.postId,
+          find.authorUsername,
+          find.authorName,
+          find.text,
+          find.url,
+          topicIdValue || null,
+          find.topicLabel,
+          find.reason,
+          find.confidence,
+          now,
+        ),
+    );
+  }
+  for (let index = 0; index < statements.length; index += 80) {
+    await d1.batch(statements.slice(index, index + 80));
+  }
+  return uniqueFinds.length;
+}
+
 export async function deleteOwnerData(ownerId: string) {
   await ensureSchema();
   const d1 = getD1();
@@ -362,6 +592,8 @@ export async function deleteOwnerData(ownerId: string) {
     d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
   ]);
 }

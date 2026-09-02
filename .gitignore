@@ -16,7 +16,9 @@ data/
 *.db-shm
 *.db-wal
 
-# Logs and editor files
+# Logs, caches, and editor files
 *.log
 .DS_Store
+tsconfig.tsbuildinfo
+.wrangler/
 

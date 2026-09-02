@@ -22,7 +22,7 @@ export async function GET() {
       response_type: 'code',
       client_id: clientId,
       redirect_uri: redirectUri,
-      scope: 'tweet.read users.read bookmark.read offline.access',
+      scope: 'tweet.read users.read bookmark.read follows.read offline.access',
       state,
       code_challenge: challenge,
       code_challenge_method: 'S256',

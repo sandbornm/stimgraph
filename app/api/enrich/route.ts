@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { loadBookmarksForEnrichment, storeAiTopics } from '@/db/storage';
 import { getRuntimeValue } from '@/lib/runtime-env';
-import { getActiveXSession } from '@/lib/x-auth-server';
+import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { enrichBookmarks } from '@/lib/xai-enrich';
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +24,10 @@ export async function POST(request: NextRequest) {
   const limit = Math.max(1, Math.min(40, Math.floor(requestedLimit)));
   const bookmarks = await loadBookmarksForEnrichment(active.session.profile.id, limit);
   if (bookmarks.length === 0) {
-    return NextResponse.json({ analyzed: 0, topics: 0, message: 'No new bookmarks need enrichment.' });
+    return withRenewedSession(
+      NextResponse.json({ analyzed: 0, topics: 0, message: 'No new bookmarks need enrichment.' }),
+      active.renewedCookie,
+    );
   }
 
   try {
@@ -37,14 +40,14 @@ export async function POST(request: NextRequest) {
         topics: item.topics.slice(0, 4),
       }));
     const topics = await storeAiTopics(active.session.profile.id, assignments);
-    return NextResponse.json({
+    return withRenewedSession(NextResponse.json({
       analyzed: assignments.length,
       topics,
       estimatedCostUsd: Number(result.estimatedCostUsd.toFixed(4)),
       zeroDataRetention: result.zeroDataRetention,
-    });
+    }), active.renewedCookie);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Grok enrichment failed.';
-    return NextResponse.json({ error: message }, { status: 502 });
+    return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), active.renewedCookie);
   }
 }

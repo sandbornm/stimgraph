@@ -9,13 +9,13 @@ export const metadata: Metadata = {
     title: 'Stimgraph — Stuff That Interests Me',
     description: 'Turn your saved ideas into an explorable map of topics, people, and connections.',
     type: 'website',
-    images: [{ url: '/og.png', width: 1731, height: 909, alt: 'Stimgraph — Stuff That Interests Me' }],
+    images: [{ url: '/og.jpg', width: 1200, height: 630, alt: 'Stimgraph — Stuff That Interests Me' }],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Stimgraph — Stuff That Interests Me',
     description: 'Turn your saved ideas into an explorable map of topics, people, and connections.',
-    images: ['/og.png'],
+    images: ['/og.jpg'],
   },
 };
 

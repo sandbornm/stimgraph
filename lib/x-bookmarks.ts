@@ -27,7 +27,34 @@ type XBookmarksResponse = {
   meta?: { next_token?: string; result_count?: number };
 };
 
-export async function fetchXBookmarks({
+export type BookmarkPage = {
+  bookmarks: StoredBookmark[];
+  page: number;
+  fetched: number;
+  hasMore: boolean;
+};
+
+function mapPosts(payload: XBookmarksResponse): StoredBookmark[] {
+  const users = new Map((payload.includes?.users ?? []).map((user) => [user.id, user]));
+  return (payload.data ?? []).map((post) => {
+    const author = users.get(post.author_id ?? '');
+    return {
+      postId: post.id,
+      authorId: author?.id ?? post.author_id ?? 'unknown',
+      authorUsername: author?.username ?? 'unknown',
+      authorName: author?.name ?? 'Unknown author',
+      authorProfileImageUrl: author?.profile_image_url,
+      text: post.text,
+      createdAt: post.created_at,
+      language: post.lang,
+      entities: post.entities ?? {},
+      metrics: post.public_metrics ?? {},
+      hashtags: [...new Set((post.entities?.hashtags ?? []).map((item) => item.tag.trim()).filter(Boolean))],
+    };
+  });
+}
+
+export async function* iterateXBookmarks({
   accessToken,
   userId,
   limit,
@@ -35,14 +62,14 @@ export async function fetchXBookmarks({
   accessToken: string;
   userId: string;
   limit: number;
-}): Promise<{ bookmarks: StoredBookmark[]; hasMore: boolean }> {
-  const bookmarks: StoredBookmark[] = [];
+}): AsyncGenerator<BookmarkPage> {
   let paginationToken: string | undefined;
-  let hasMore = false;
+  let fetched = 0;
+  let page = 0;
 
-  while (bookmarks.length < limit) {
+  while (fetched < limit) {
     const url = new URL(`https://api.x.com/2/users/${userId}/bookmarks`);
-    url.searchParams.set('max_results', String(Math.min(100, limit - bookmarks.length)));
+    url.searchParams.set('max_results', String(Math.min(100, limit - fetched)));
     url.searchParams.set('tweet.fields', 'id,text,author_id,created_at,lang,entities,public_metrics');
     url.searchParams.set('expansions', 'author_id');
     url.searchParams.set('user.fields', 'id,name,username,profile_image_url');
@@ -57,28 +84,34 @@ export async function fetchXBookmarks({
     }
 
     const payload = (await response.json()) as XBookmarksResponse;
-    const users = new Map((payload.includes?.users ?? []).map((user) => [user.id, user]));
-    for (const post of payload.data ?? []) {
-      const author = users.get(post.author_id ?? '');
-      bookmarks.push({
-        postId: post.id,
-        authorId: author?.id ?? post.author_id ?? 'unknown',
-        authorUsername: author?.username ?? 'unknown',
-        authorName: author?.name ?? 'Unknown author',
-        authorProfileImageUrl: author?.profile_image_url,
-        text: post.text,
-        createdAt: post.created_at,
-        language: post.lang,
-        entities: post.entities ?? {},
-        metrics: post.public_metrics ?? {},
-        hashtags: [...new Set((post.entities?.hashtags ?? []).map((item) => item.tag.trim()).filter(Boolean))],
-      });
-    }
-
+    const bookmarks = mapPosts(payload);
+    fetched += bookmarks.length;
+    page += 1;
     paginationToken = payload.meta?.next_token;
-    if (!paginationToken) break;
-    hasMore = true;
+    yield {
+      bookmarks,
+      page,
+      fetched,
+      hasMore: Boolean(paginationToken) && fetched < limit,
+    };
+    if (!paginationToken || bookmarks.length === 0) break;
   }
+}
 
+export async function fetchXBookmarks({
+  accessToken,
+  userId,
+  limit,
+}: {
+  accessToken: string;
+  userId: string;
+  limit: number;
+}): Promise<{ bookmarks: StoredBookmark[]; hasMore: boolean }> {
+  const bookmarks: StoredBookmark[] = [];
+  let hasMore = false;
+  for await (const page of iterateXBookmarks({ accessToken, userId, limit })) {
+    bookmarks.push(...page.bookmarks);
+    hasMore = page.hasMore;
+  }
   return { bookmarks, hasMore };
 }

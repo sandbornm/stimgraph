@@ -62,3 +62,41 @@ export const bookmarkTopics = sqliteTable(
     index('idx_bookmark_topics_owner_topic').on(table.ownerId, table.topicId),
   ],
 );
+
+export const follows = sqliteTable(
+  'follows',
+  {
+    ownerId: text('owner_id').notNull(),
+    userId: text('user_id').notNull(),
+    username: text('username').notNull(),
+    name: text('name').notNull(),
+    profileImageUrl: text('profile_image_url'),
+    description: text('description'),
+    syncedAt: integer('synced_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.userId] }),
+    index('idx_follows_owner_username').on(table.ownerId, table.username),
+  ],
+);
+
+export const scouts = sqliteTable(
+  'scouts',
+  {
+    ownerId: text('owner_id').notNull(),
+    postId: text('post_id').notNull(),
+    authorUsername: text('author_username').notNull(),
+    authorName: text('author_name').notNull(),
+    text: text('text').notNull(),
+    url: text('url'),
+    topicId: text('topic_id'),
+    topicLabel: text('topic_label').notNull(),
+    reason: text('reason').notNull(),
+    confidence: integer('confidence').notNull().default(70),
+    scoutedAt: integer('scouted_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.postId] }),
+    index('idx_scouts_owner_scouted').on(table.ownerId, table.scoutedAt),
+  ],
+);

@@ -6,6 +6,7 @@ type XaiResponse = {
     type?: string;
     content?: Array<{ type?: string; text?: string }>;
   }>;
+  output_text?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
@@ -62,11 +63,11 @@ export async function enrichBookmarks(bookmarks: BookmarkForEnrichment[]) {
       model: 'grok-4.6',
       store: false,
       reasoning: { effort: 'low' },
-      max_output_tokens: 8_000,
+      max_output_tokens: 3_200,
       input: [
         {
           role: 'system',
-          content: 'Classify saved X posts into concise, broadly useful content topics. Stay grounded in the post text. Do not infer personal traits, identity, health, politics, religion, or other sensitive attributes about the bookmark owner. A topic may describe sensitive subject matter only when the post explicitly discusses it. Prefer reusable labels such as “Generative interfaces” over vague labels such as “Interesting”. Return every supplied post_id exactly once.',
+          content: 'Classify saved X posts into concise, reusable topics. Stay grounded in the post text. Do not infer personal traits, identity, health, politics, religion, or other sensitive attributes about the bookmark owner. Prefer labels such as “Generative interfaces” over “Interesting”. Return every supplied post_id exactly once.',
         },
         {
           role: 'user',
@@ -74,7 +75,7 @@ export async function enrichBookmarks(bookmarks: BookmarkForEnrichment[]) {
             posts: bookmarks.map((bookmark) => ({
               post_id: bookmark.postId,
               author: `@${bookmark.authorUsername}`,
-              text: bookmark.text,
+              text: bookmark.text.length > 240 ? `${bookmark.text.slice(0, 239).trim()}…` : bookmark.text,
             })),
           }),
         },
@@ -96,12 +97,22 @@ export async function enrichBookmarks(bookmarks: BookmarkForEnrichment[]) {
   }
 
   const payload = (await response.json()) as XaiResponse;
-  const outputText = payload.output
-    ?.find((item) => item.type === 'message')
-    ?.content?.find((content) => content.type === 'output_text')?.text;
+  const outputText = (typeof payload.output_text === 'string' && payload.output_text.trim()
+    ? payload.output_text
+    : payload.output
+      ?.find((item) => item.type === 'message')
+      ?.content?.find((content) => content.type === 'output_text')?.text) ?? '';
   if (!outputText) throw new Error('Grok returned no structured topic data.');
 
-  const parsed = JSON.parse(outputText) as XaiEnrichment;
+  let parsed: XaiEnrichment;
+  try {
+    parsed = JSON.parse(outputText) as XaiEnrichment;
+  } catch {
+    const start = outputText.indexOf('{');
+    const end = outputText.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('Grok returned no structured topic data.');
+    parsed = JSON.parse(outputText.slice(start, end + 1)) as XaiEnrichment;
+  }
   if (!Array.isArray(parsed.items)) throw new Error('Grok returned invalid topic data.');
 
   const inputTokens = payload.usage?.input_tokens ?? 0;

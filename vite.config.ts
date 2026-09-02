@@ -47,6 +47,7 @@ export default defineConfig(async () => {
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
     server: {
+      host: '127.0.0.1',
       port: 3001,
       strictPort: true,
       ...(isCodexSeatbeltSandbox
