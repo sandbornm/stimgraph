@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         live,
         limit,
       });
-      return withRenewedSession(response, active.renewedCookie);
+      return withRenewedSession(response, request, active.renewedCookie);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
       return NextResponse.json({ error: message }, { status: 502 });
@@ -150,5 +150,5 @@ export async function POST(request: NextRequest) {
       'Cache-Control': 'no-store',
     },
   });
-  return withRenewedSession(response, active.renewedCookie);
+  return withRenewedSession(response, request, active.renewedCookie);
 }

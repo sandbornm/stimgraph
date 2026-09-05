@@ -15,7 +15,7 @@ export type CapsuleEdge = {
   from: string;
   to: string;
   weight: number;
-  kind: 'evidence' | 'affinity';
+  kind: 'evidence' | 'affinity' | 'follows';
 };
 
 export type GraphCapsule = {
@@ -45,7 +45,7 @@ export function parseCapsule(value: unknown): GraphCapsule | null {
   const edges = input.edges.slice(0, 360).filter((edge): edge is CapsuleEdge => Boolean(
     edge && typeof edge.from === 'string' && typeof edge.to === 'string' &&
     nodeIds.has(edge.from) && nodeIds.has(edge.to) && typeof edge.weight === 'number' &&
-    (edge.kind === 'evidence' || edge.kind === 'affinity'),
+    (edge.kind === 'evidence' || edge.kind === 'affinity' || edge.kind === 'follows'),
   )).map((edge) => ({ ...edge, weight: Math.max(0, Math.min(1, edge.weight)) }));
   if (nodes.length === 0) return null;
   return { version: 1, name: input.name.slice(0, 60), rootId: typeof input.rootId === 'string' ? input.rootId : null, nodes, edges };

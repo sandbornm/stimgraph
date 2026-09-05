@@ -10,6 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "test": "node --experimental-strip-types --test lib/*.test.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

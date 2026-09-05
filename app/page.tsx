@@ -2,7 +2,20 @@
 
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
+import {
+  SELF_NODE_ID,
+  buildFollowsEdges,
+  collectNeighborhoodIds,
+  isFollowOnlyPerson,
+  isSelfId,
+  rankSearchHits,
+  withSearchLabel,
+  type GraphEdge,
+} from '@/lib/graph-model';
 import { readNdjson } from '@/lib/read-ndjson';
+import { ExploreGraph } from './explore-graph';
+import { TrajectoryWorkbench } from './trajectory-workbench';
+import { buildExploreIndex, connectionReason, exploreConnections, pruneExploreTrail, visitExploreTrail, type ExploreOrientation, type ExploreTrail } from '@/lib/explore-model';
 import type { FeedProbe } from '@/lib/rss-probe';
 
 type NodeKind = 'topic' | 'person' | 'source' | 'scout';
@@ -20,20 +33,18 @@ type StimNode = {
   url?: string;
   origin?: 'local' | 'seed' | 'bridge';
   followed?: boolean;
+  self?: boolean;
+  searchLabel?: string;
 };
 
-type Edge = {
-  from: string;
-  to: string;
-  weight: number;
-  kind: 'evidence' | 'affinity';
-};
+type Edge = GraphEdge;
 
 type GraphTuning = {
   density: number;
   signalFloor: number;
   motion: number;
   affinities: boolean;
+  follows: boolean;
   guides: boolean;
   labels: 'focus' | 'topics' | 'all';
   palette: 'spectrum' | 'phosphor' | 'ice';
@@ -44,6 +55,7 @@ const defaultTuning: GraphTuning = {
   signalFloor: 22,
   motion: 24,
   affinities: true,
+  follows: true,
   guides: true,
   labels: 'topics',
   palette: 'phosphor',
@@ -63,6 +75,7 @@ function readStoredTuning(): GraphTuning {
       signalFloor: Number.isFinite(signalFloor) ? Math.min(80, Math.max(8, signalFloor)) : defaultTuning.signalFloor,
       motion: Number.isFinite(motion) ? Math.min(100, Math.max(0, motion)) : defaultTuning.motion,
       affinities: typeof value.affinities === 'boolean' ? value.affinities : defaultTuning.affinities,
+      follows: typeof value.follows === 'boolean' ? value.follows : defaultTuning.follows,
       guides: typeof value.guides === 'boolean' ? value.guides : defaultTuning.guides,
       labels: value.labels === 'focus' || value.labels === 'topics' || value.labels === 'all' ? value.labels : defaultTuning.labels,
       palette: value.palette === 'spectrum' || value.palette === 'phosphor' || value.palette === 'ice' ? value.palette : defaultTuning.palette,
@@ -73,9 +86,9 @@ function readStoredTuning(): GraphTuning {
 }
 
 const tuningPresets: Array<{ name: string; value: GraphTuning }> = [
-  { name: 'Quiet', value: { density: 42, signalFloor: 48, motion: 18, affinities: false, guides: false, labels: 'focus', palette: 'ice' } },
+  { name: 'Quiet', value: { density: 42, signalFloor: 48, motion: 18, affinities: false, follows: true, guides: false, labels: 'focus', palette: 'ice' } },
   { name: 'Balanced', value: defaultTuning },
-  { name: 'Charged', value: { density: 100, signalFloor: 12, motion: 86, affinities: true, guides: true, labels: 'all', palette: 'spectrum' } },
+  { name: 'Charged', value: { density: 100, signalFloor: 12, motion: 86, affinities: true, follows: true, guides: true, labels: 'all', palette: 'spectrum' } },
 ];
 
 function stableFraction(value: string) {
@@ -90,7 +103,11 @@ function stableFraction(value: string) {
 type ThemeName = 'dark' | 'light';
 
 function isFollowOnly(node: StimNode) {
-  return node.kind === 'person' && Boolean(node.followed) && node.evidence.startsWith('Following');
+  return isFollowOnlyPerson(node.kind, node.followed, node.evidence, node.id);
+}
+
+function isSelf(node: StimNode) {
+  return Boolean(node.self) || isSelfId(node.id);
 }
 
 function darkenHex(hex: string, amount: number) {
@@ -215,6 +232,7 @@ function hexRgba(hex: string, alpha: number) {
 }
 
 function layerRadius(node: StimNode) {
+  if (isSelf(node)) return 0.58;
   if (node.kind === 'topic') return 0.76;
   if (node.kind === 'scout') return 1.14;
   if (node.kind === 'source') return 1.05;
@@ -302,35 +320,31 @@ function randomOffset(span: number) {
   return 1 + Math.floor(Math.random() * Math.max(1, span));
 }
 
-function matchScore(haystack: string, needle: string) {
-  if (!needle) return 1;
-  const hay = haystack.toLowerCase();
-  const n = needle.toLowerCase().trim();
-  if (!n) return 1;
-  if (hay === n) return 100;
-  const at = hay.indexOf(n);
-  if (at < 0) return 0;
-  if (at === 0) return 92;
-  const before = hay[at - 1];
-  if (before === ' ' || before === '·' || before === '-' || before === '/' || before === '_' || before === '@' || before === '#') return 80;
-  return Math.max(12, 48 - Math.min(30, at));
-}
-
-function parseSearch(raw: string): { needle: string; kind: NodeKind | 'command' | null } {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('@')) return { needle: trimmed.slice(1).trim(), kind: 'person' };
-  if (trimmed.startsWith('#')) return { needle: trimmed.slice(1).trim(), kind: 'topic' };
-  if (trimmed.startsWith('*')) return { needle: trimmed.slice(1).trim(), kind: 'scout' };
-  if (trimmed.startsWith(':') || trimmed.startsWith('>')) return { needle: trimmed.slice(1).trim(), kind: 'command' };
-  return { needle: trimmed, kind: null };
-}
-
 type GuideStop = { id: string; beat: string };
+
+const PALETTE_COMMANDS = [
+  { id: 'cmd:explore', label: 'Explore', detail: 'Follow connections from your bookmarks' },
+  { id: 'cmd:guide', label: 'Guide me', detail: 'Walk the strongest nodes' },
+  { id: 'cmd:keys', label: 'Keys', detail: 'Keyboard shortcuts' },
+  { id: 'cmd:map', label: 'Map', detail: 'Whole map' },
+  { id: 'cmd:people', label: 'People', detail: 'Authors you save' },
+  { id: 'cmd:threads', label: 'Topics', detail: 'Topics' },
+  { id: 'cmd:bookmarks', label: 'Bookmarks', detail: 'Saved posts' },
+  { id: 'cmd:scout', label: 'Scout', detail: 'Suggested posts' },
+  { id: 'cmd:neighborhood', label: 'Neighborhood', detail: 'Grow from focus' },
+  { id: 'cmd:combine', label: 'Combine', detail: 'Two graphs' },
+  { id: 'cmd:tune', label: 'Tune', detail: 'Graph controls' },
+  { id: 'cmd:feeds', label: 'Feeds', detail: 'RSS on linked sites' },
+  { id: 'cmd:log', label: 'Log', detail: 'What just happened' },
+  { id: 'cmd:share', label: 'Copy link', detail: 'Send this map' },
+  { id: 'cmd:rediscover', label: 'Rediscover', detail: 'Jump somewhere new' },
+  { id: 'cmd:sync', label: 'Sync', detail: 'Pull bookmarks from X' },
+] as const;
 
 function buildGuideStops(nodes: StimNode[], edges: Edge[]): GuideStop[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const topics = nodes.filter((node) => node.kind === 'topic').sort((first, second) => second.size - first.size);
-  const people = nodes.filter((node) => node.kind === 'person' && !isFollowOnly(node)).sort((first, second) => second.size - first.size);
+  const people = nodes.filter((node) => node.kind === 'person' && !isFollowOnly(node) && !isSelf(node)).sort((first, second) => second.size - first.size);
   const bridges = nodes.filter((node) => node.origin === 'bridge');
   const scouts = nodes.filter((node) => node.kind === 'scout');
   const stops: GuideStop[] = [];
@@ -501,7 +515,23 @@ function buildDemoGraph(): { nodes: StimNode[]; edges: Edge[] } {
       kind: 'affinity',
     });
   });
-  return { nodes: [...topics, ...people, ...followOnly, ...sources, ...scouts], edges };
+  const you: StimNode = withSearchLabel({
+    id: SELF_NODE_ID,
+    label: 'You',
+    kind: 'person',
+    x: 0.5,
+    y: 0.5,
+    size: 10,
+    color: '#f2f2f0',
+    note: 'This map is yours. Solid lines are saved posts. Dotted overlap is shared topics. Hairlines are accounts you follow.',
+    evidence: 'You · demo map',
+    self: true,
+  });
+  const nodes = [...topics, you, ...people, ...followOnly, ...sources, ...scouts].map((node) => (
+    node.searchLabel ? node : withSearchLabel(node)
+  ));
+  edges.push(...buildFollowsEdges(SELF_NODE_ID, nodes));
+  return { nodes, edges };
 }
 
 const demoGraph = buildDemoGraph();
@@ -515,23 +545,6 @@ function semanticNodeKey(node: { id: string; label: string; kind: string }) {
     return `person:${handle ?? slug(node.label.split('·')[0])}`;
   }
   return node.id;
-}
-
-function collectNeighborhoodIds(rootId: string, nodes: StimNode[], edges: Edge[], depth: number) {
-  const available = new Set(nodes.map((node) => node.id));
-  const visited = new Set<string>(available.has(rootId) ? [rootId] : []);
-  let frontier = new Set(visited);
-  for (let step = 0; step < depth; step += 1) {
-    const next = new Set<string>();
-    edges.forEach((edge) => {
-      if (frontier.has(edge.from) && available.has(edge.to) && !visited.has(edge.to)) next.add(edge.to);
-      if (frontier.has(edge.to) && available.has(edge.from) && !visited.has(edge.from)) next.add(edge.from);
-    });
-    next.forEach((id) => visited.add(id));
-    frontier = next;
-    if (frontier.size === 0) break;
-  }
-  return visited;
 }
 
 function buildDemoCapsule(): GraphCapsule {
@@ -658,7 +671,7 @@ const GraphCanvas = memo(function GraphCanvas({
   nodes,
   edges,
   selectedId,
-  query,
+  searchNeedleRef,
   tuning,
   freshIds,
   busy,
@@ -669,7 +682,7 @@ const GraphCanvas = memo(function GraphCanvas({
   nodes: StimNode[];
   edges: Edge[];
   selectedId: string | null;
-  query: string;
+  searchNeedleRef: { current: string };
   tuning: GraphTuning;
   freshIds: Set<string>;
   busy: boolean;
@@ -684,7 +697,9 @@ const GraphCanvas = memo(function GraphCanvas({
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const selectedIdRef = useRef(selectedId);
-  const queryRef = useRef(query);
+  const nodeByIdRef = useRef(new Map(nodes.map((node) => [node.id, node])));
+  const adjacencyRef = useRef(new Map<string, string[]>());
+  const matchCacheRef = useRef({ key: '', set: null as Set<string> | null });
   const frameIdsRef = useRef(frameIds);
   const hoverRef = useRef<string | null>(null);
   const cursorRef = useRef({ x: 0, y: 0, active: false });
@@ -721,9 +736,19 @@ const GraphCanvas = memo(function GraphCanvas({
     nodesRef.current = nodes;
     edgesRef.current = edges;
     selectedIdRef.current = selectedId;
-    queryRef.current = query;
+    nodeByIdRef.current = new Map(nodes.map((node) => [node.id, node]));
+    const adjacency = new Map<string, string[]>();
+    for (const edge of edges) {
+      const fromList = adjacency.get(edge.from);
+      if (fromList) fromList.push(edge.to);
+      else adjacency.set(edge.from, [edge.to]);
+      const toList = adjacency.get(edge.to);
+      if (toList) toList.push(edge.from);
+      else adjacency.set(edge.to, [edge.from]);
+    }
+    adjacencyRef.current = adjacency;
     frameIdsRef.current = frameIds;
-  }, [busy, edges, frameIds, freshIds, nodes, query, selectedId, tuning]);
+  }, [busy, edges, frameIds, freshIds, nodes, selectedId, tuning]);
 
   useEffect(() => {
     if (!frameToken) return;
@@ -816,12 +841,18 @@ const GraphCanvas = memo(function GraphCanvas({
       const nodes = nodesRef.current;
       const edges = edgesRef.current;
       const selectedId = selectedIdRef.current;
-      const query = queryRef.current;
-      const nodeById = new Map(nodes.map((node) => [node.id, node]));
-      const needle = query.trim().toLowerCase();
-      const matches = needle
-        ? new Set(nodes.filter((node) => `${node.label} ${node.note}`.toLowerCase().includes(needle)).map((node) => node.id))
-        : null;
+      const nodeById = nodeByIdRef.current;
+      const needle = searchNeedleRef.current.trim().toLowerCase();
+      const matchKey = `${needle}:${nodes.length}:${nodes[0]?.id ?? ''}`;
+      if (matchCacheRef.current.key !== matchKey) {
+        matchCacheRef.current = {
+          key: matchKey,
+          set: needle
+            ? new Set(nodes.filter((node) => (node.searchLabel ?? node.label.toLowerCase()).includes(needle) || node.note.toLowerCase().includes(needle)).map((node) => node.id))
+            : null,
+        };
+      }
+      const matches = matchCacheRef.current.set;
       const camera = cameraAnimRef.current;
       if (camera.active) {
         const progress = Math.min(1, (time - camera.start) / camera.duration);
@@ -993,10 +1024,8 @@ const GraphCanvas = memo(function GraphCanvas({
       const connected = new Set<string>();
       if (focusId) {
         connected.add(focusId);
-        edges.forEach((edge) => {
-          if (edge.from === focusId) connected.add(edge.to);
-          if (edge.to === focusId) connected.add(edge.from);
-        });
+        const neighbors = adjacencyRef.current.get(focusId);
+        if (neighbors) neighbors.forEach((id) => connected.add(id));
       }
 
       const sphereById = new Map<string, SpherePoint>();
@@ -1095,17 +1124,20 @@ const GraphCanvas = memo(function GraphCanvas({
         const from = nodeById.get(edge.from);
         const to = nodeById.get(edge.to);
         if (!from || !to) return;
+        const isFollows = edge.kind === 'follows';
         const active = !focusId || edge.from === focusId || edge.to === focusId;
-        if (focusId && !active && edgeIndex % 2 !== 0) return;
-        if (!focusId && edges.length > 1800 && edge.weight < .45 && edgeIndex % 2 !== 0) return;
+        if (focusId && !active && (isFollows || edgeIndex % 2 !== 0)) return;
+        if (!focusId && isFollows && edgeIndex % 3 !== 0) return;
+        if (!focusId && !isFollows && edges.length > 1800 && edge.weight < .45 && edgeIndex % 2 !== 0) return;
         const fromSphere = sphereById.get(from.id);
         const toSphere = sphereById.get(to.id);
         if (!fromSphere || !toSphere) return;
+        const midZ = (fromSphere.z + toSphere.z) / 2;
+        if (isFollows && !active && midZ < 0.04) return;
         const searchVisible = !matches || matches.has(edge.from) || matches.has(edge.to);
-        const signalAlpha = edge.kind === 'affinity' ? 0.62 : 1;
+        const signalAlpha = edge.kind === 'affinity' ? 0.62 : isFollows ? 0.38 : 1;
         const fromColor = tunedNodeColor(from, settings.palette, theme);
         const toColor = tunedNodeColor(to, settings.palette, theme);
-        const midZ = (fromSphere.z + toSphere.z) / 2;
         const depthFade = 0.22 + 0.78 * Math.max(0, midZ);
         if (focusId && active && searchVisible) {
           context.strokeStyle = `rgba(${edgeRgb}, ${(0.1 + edge.weight * 0.18) * signalAlpha * depthFade})`;
@@ -1113,7 +1145,7 @@ const GraphCanvas = memo(function GraphCanvas({
           const alpha = active && searchVisible ? (0.05 + edge.weight * 0.09) * signalAlpha * depthFade : 0.028 * depthFade;
           context.strokeStyle = `rgba(${edgeRgb}, ${alpha})`;
         }
-        if (focusId && active && searchVisible && fromSphere.z > 0.08 && toSphere.z > 0.08) {
+        if (!isFollows && focusId && active && searchVisible && fromSphere.z > 0.08 && toSphere.z > 0.08) {
           const a = projectSpherePoint(fromSphere);
           const b = projectSpherePoint(toSphere);
           const gradient = context.createLinearGradient(a.x, a.y, b.x, b.y);
@@ -1125,12 +1157,13 @@ const GraphCanvas = memo(function GraphCanvas({
         const fromReach = animatedPoints.get(from.id)?.reach ?? 0;
         const toReach = animatedPoints.get(to.id)?.reach ?? 0;
         const reachBoost = 1 + Math.max(fromReach, toReach) * 1.8;
-        context.lineWidth = (active ? 0.4 + edge.weight * 0.7 : 0.32) * (0.7 + 0.3 * Math.max(0, midZ));
+        context.lineWidth = (isFollows ? 0.28 : active ? 0.4 + edge.weight * 0.7 : 0.32) * (0.7 + 0.3 * Math.max(0, midZ));
         if (edge.kind === 'affinity') context.setLineDash([1.2, 4.5]);
+        else if (isFollows) context.setLineDash([3.4, 6.2]);
         context.globalAlpha = Math.min(1, (active && searchVisible ? 1 : 0.55) * reachBoost);
         context.beginPath();
         let drawing = false;
-        const steps = fromSphere.z > 0.2 && toSphere.z > 0.2 ? 8 : 12;
+        const steps = isFollows ? 5 : fromSphere.z > 0.2 && toSphere.z > 0.2 ? 8 : 12;
         for (let step = 0; step <= steps; step += 1) {
           const sample = projectSpherePoint(slerpSphere(fromSphere, toSphere, step / steps));
           if (sample.z < -0.22) {
@@ -1146,7 +1179,7 @@ const GraphCanvas = memo(function GraphCanvas({
         }
         context.stroke();
         context.globalAlpha = 1;
-        if (edge.kind === 'affinity') context.setLineDash([]);
+        if (edge.kind === 'affinity' || isFollows) context.setLineDash([]);
 
         if (motionStrength > 0 && edge.kind === 'evidence' && active && searchVisible && edge.weight > 0.42 && (focusId || fromReach > 0.2 || edgeIndex % 5 === 0)) {
           const travel = (motionTime * (0.00003 + edge.weight * 0.00003) + edge.weight) % 1;
@@ -1213,6 +1246,17 @@ const GraphCanvas = memo(function GraphCanvas({
           context.beginPath();
           context.arc(point.x, point.y, Math.max(1.15, radius * 0.72), 0, Math.PI * 2);
           context.fill();
+        } else if (isSelf(node)) {
+          const ring = Math.max(2.2, radius * 0.92);
+          context.strokeStyle = hexRgba(nodeColor, selected || hovered ? 0.95 : 0.72);
+          context.lineWidth = selected || hovered ? 1.7 : 1.15;
+          context.beginPath();
+          context.arc(point.x, point.y, ring, 0, Math.PI * 2);
+          context.stroke();
+          context.fillStyle = nodeColor;
+          context.beginPath();
+          context.arc(point.x, point.y, Math.max(1.1, ring * 0.28), 0, Math.PI * 2);
+          context.fill();
         } else {
           context.fillStyle = nodeColor;
           context.beginPath();
@@ -1240,7 +1284,7 @@ const GraphCanvas = memo(function GraphCanvas({
           context.setLineDash([]);
         }
 
-        const showLabel = point.z > 0.04 && (hovered || selected || fresh || inHand || node.origin === 'bridge' || (query.trim().length > 0 && visible) ||
+        const showLabel = point.z > 0.04 && (hovered || selected || fresh || inHand || node.origin === 'bridge' || isSelf(node) || (needle.length > 0 && visible) ||
           (settings.labels === 'topics' && node.kind === 'topic' && node.size >= 13 && (!focusId || connected.has(node.id))) ||
           (settings.labels === 'all' && node.kind !== 'source' && (!focusId || connected.has(node.id))));
         if (showLabel) {
@@ -1279,7 +1323,7 @@ const GraphCanvas = memo(function GraphCanvas({
       document.removeEventListener('visibilitychange', onVisibility);
       cancelAnimationFrame(frameRef.current);
     };
-  }, [getPoint]);
+  }, [getPoint, searchNeedleRef]);
 
   const hitTest = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -1384,6 +1428,7 @@ function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, time
 
 type ConnectionState = {
   connected: boolean;
+  configured?: boolean;
   profile?: { id: string; username: string; name: string; profileImageUrl?: string };
 };
 
@@ -1394,7 +1439,7 @@ type GraphResponse = {
   scope?: 'overview' | 'wide';
 };
 
-type ViewMode = 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend' | 'feeds';
+type ViewMode = 'explore' | 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend' | 'feeds';
 
 type TraceKind = 'boot' | 'sync' | 'map' | 'live' | 'enrich' | 'scout' | 'rss' | 'note';
 
@@ -1431,8 +1476,13 @@ type SyncStreamEvent = {
 
 export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [exploreTrail, setExploreTrail] = useState<ExploreTrail>({ steps: [], cursor: -1 });
+  const [exploreVisited, setExploreVisited] = useState<Set<string>>(new Set());
+  const [exploreDetailsOpen, setExploreDetailsOpen] = useState(false);
+  const [exploreOrientation, setExploreOrientation] = useState<ExploreOrientation>('LR');
   const [query, setQuery] = useState('');
   const [connection, setConnection] = useState<ConnectionState>({ connected: false });
+  const [connecting, setConnecting] = useState(false);
   const [graphNodes, setGraphNodes] = useState<StimNode[]>(demoNodes);
   const [graphEdges, setGraphEdges] = useState<Edge[]>(demoEdges);
   const [totals, setTotals] = useState<{ bookmark_count: number; author_count: number; scout_count?: number; following_count?: number }>({
@@ -1446,19 +1496,9 @@ export default function Home() {
   const [shareUrl, setShareUrl] = useState('');
   const [incomingShare, setIncomingShare] = useState<GraphCapsule | null>(null);
   const [sharePath, setSharePath] = useState('');
-  const [view, setView] = useState<ViewMode>('map');
-  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>(() => {
-    if (typeof window === 'undefined') return 'idle';
-    const auth = new URLSearchParams(window.location.search).get('auth');
-    return auth === 'invalid' || auth === 'failed' ? 'error' : 'idle';
-  });
-  const [syncMessage, setSyncMessage] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    const auth = new URLSearchParams(window.location.search).get('auth');
-    if (auth === 'invalid') return 'X connect did not complete. Open http://127.0.0.1:3001 — not localhost.';
-    if (auth === 'failed') return 'X token exchange failed. Check X_REDIRECT_URI is http://127.0.0.1:3001/api/auth/x/callback.';
-    return '';
-  });
+  const [view, setView] = useState<ViewMode>('explore');
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
+  const [syncMessage, setSyncMessage] = useState('');
   const [pulling, setPulling] = useState(false);
   const [liveInserted, setLiveInserted] = useState(0);
   const [liveWatch, setLiveWatch] = useState(false);
@@ -1496,13 +1536,16 @@ export default function Home() {
   const deferredQuery = useDeferredValue(query);
   const deferredDensity = useDeferredValue(tuning.density);
   const deferredSignalFloor = useDeferredValue(tuning.signalFloor);
+  const searchNeedleRef = useRef(query);
+  useLayoutEffect(() => { searchNeedleRef.current = query; }, [query]);
   const searchRef = useRef<HTMLInputElement>(null);
   const paletteInputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const readerTitleRef = useRef<HTMLHeadingElement>(null);
   const fieldScopeRef = useRef(fieldScope);
   const syncingRef = useRef(false);
   const topicCount = graphNodes.filter((node) => node.kind === 'topic').length;
-  const peopleCount = graphNodes.filter((node) => node.kind === 'person').length;
+  const peopleCount = graphNodes.filter((node) => node.kind === 'person' && !isSelf(node)).length;
   const sourceCount = graphNodes.filter((node) => node.kind === 'source').length;
   const scoutCount = graphNodes.filter((node) => node.kind === 'scout').length;
   const liveState: 'off' | 'watching' | 'pulling' = mode === 'live' && connection.connected && liveWatch
@@ -1531,16 +1574,17 @@ export default function Home() {
   }, [activeEdges, visibleNodes]);
   const directoryView = view === 'people' || view === 'threads' || view === 'bookmarks' || view === 'scout' || view === 'neighborhood';
   const renderedNodes = useMemo(() => {
-    const needle = deferredQuery.trim().toLowerCase();
+    const needle = paletteOpen ? '' : deferredQuery.trim().toLowerCase();
     return visibleNodes.filter((node) =>
       directoryView
       || node.id === selectedId
       || node.kind === 'topic'
+      || isSelf(node)
       || node.origin === 'bridge'
-      || (needle.length > 0 && `${node.label} ${node.note} ${node.evidence}`.toLowerCase().includes(needle))
+      || (needle.length > 0 && (node.searchLabel ?? node.label.toLowerCase()).includes(needle))
       || stableFraction(node.id) <= deferredDensity / 100,
     );
-  }, [deferredDensity, deferredQuery, directoryView, selectedId, visibleNodes]);
+  }, [deferredDensity, deferredQuery, directoryView, paletteOpen, selectedId, visibleNodes]);
   const viewTuning = useMemo(() => (
     directoryView || view === 'blend' ? { ...tuning, labels: 'all' as const } : tuning
   ), [directoryView, tuning, view]);
@@ -1548,9 +1592,10 @@ export default function Home() {
     const bySize = (nodes: StimNode[]) => [...nodes].sort((first, second) => second.size - first.size);
     if (view === 'people') {
       const people = graphNodes.filter((node) => node.kind === 'person');
-      const saved = bySize(people.filter((node) => !isFollowOnly(node))).slice(0, 10);
+      const you = people.filter((node) => isSelf(node));
+      const saved = bySize(people.filter((node) => !isFollowOnly(node) && !isSelf(node))).slice(0, 10);
       const following = people.filter((node) => isFollowOnly(node)).slice(0, 6);
-      return [...saved, ...following];
+      return [...you, ...saved, ...following];
     }
     if (view === 'threads') return bySize(graphNodes.filter((node) => node.kind === 'topic')).slice(0, 14);
     if (view === 'bookmarks') return graphNodes.filter((node) => node.kind === 'source').slice(0, 16);
@@ -1561,80 +1606,36 @@ export default function Home() {
   }, [blendedGraph.nodes, graphNodes, view, visibleNodes]);
   const guideStops = useMemo(() => buildGuideStops(graphNodes, graphEdges), [graphEdges, graphNodes]);
   const guideStop = guideIndex >= 0 ? guideStops[guideIndex] ?? null : null;
-  const paletteHits = useMemo(() => {
-    const parsed = parseSearch(query);
-    const needle = parsed.needle;
-    const hits: PaletteHit[] = [];
-    if (parsed.kind !== 'command') {
-      graphNodes.forEach((node) => {
-        if (parsed.kind && node.kind !== parsed.kind) return;
-        const score = Math.max(
-          matchScore(node.label, needle),
-          matchScore(node.note, needle) * 0.7,
-          matchScore(node.evidence, needle) * 0.55,
-        );
-        if (needle && score <= 0) return;
-        hits.push({
-          id: node.id,
-          label: node.label,
-          detail: node.kind === 'source' ? 'bookmark' : node.kind,
-          kind: node.kind,
-          score: needle ? score : node.size,
-        });
-      });
-    }
-    if (!parsed.kind || parsed.kind === 'command') {
-      ([
-        ['cmd:guide', 'Guide me', 'Walk the strongest nodes'],
-        ['cmd:keys', 'Keys', 'Keyboard shortcuts'],
-        ['cmd:map', 'Map', 'Whole map'],
-        ['cmd:people', 'People', 'Authors you save'],
-        ['cmd:threads', 'Topics', 'Topics'],
-        ['cmd:bookmarks', 'Bookmarks', 'Saved posts'],
-        ['cmd:scout', 'Scout', 'Suggested posts'],
-        ['cmd:neighborhood', 'Neighborhood', 'Grow from focus'],
-        ['cmd:combine', 'Combine', 'Two graphs'],
-        ['cmd:tune', 'Tune', 'Graph controls'],
-        ['cmd:feeds', 'Feeds', 'RSS on linked sites'],
-        ['cmd:log', 'Log', 'What just happened'],
-        ['cmd:share', 'Copy link', 'Send this map'],
-        ['cmd:rediscover', 'Rediscover', 'Jump somewhere new'],
-        ['cmd:sync', 'Sync', 'Pull bookmarks from X'],
-      ] as const).forEach(([id, label, detail], order) => {
-        const score = needle
-          ? Math.max(matchScore(label, needle), matchScore(detail, needle) * 0.6)
-          : 20 - order;
-        if (needle && score <= 0) return;
-        hits.push({ id, label, detail, kind: 'command', score });
-      });
-    }
-    hits.sort((first, second) => second.score - first.score || first.label.localeCompare(second.label));
-    if (!needle && !parsed.kind) {
-      return [
-        ...hits.filter((hit) => hit.kind === 'command'),
-        ...hits.filter((hit) => hit.kind !== 'command').slice(0, 8),
-      ];
-    }
-    return hits.slice(0, 28);
-  }, [graphNodes, query]);
+  const paletteHits = useMemo(() => rankSearchHits(query, graphNodes, PALETTE_COMMANDS).map((hit) => ({
+    ...hit,
+    kind: hit.kind === 'command' ? 'command' as const : hit.kind as NodeKind,
+  })), [graphNodes, query]);
   const renderedNodeIds = useMemo(() => new Set(renderedNodes.map((node) => node.id)), [renderedNodes]);
   const renderedEdges = useMemo(() => visibleEdges.filter((edge) =>
     renderedNodeIds.has(edge.from) && renderedNodeIds.has(edge.to) &&
-    edge.weight * 100 >= deferredSignalFloor && (tuning.affinities || edge.kind === 'evidence'),
-  ), [deferredSignalFloor, renderedNodeIds, tuning.affinities, visibleEdges]);
+    edge.weight * 100 >= deferredSignalFloor
+    && (tuning.affinities || edge.kind !== 'affinity')
+    && (tuning.follows || edge.kind !== 'follows'),
+  ), [deferredSignalFloor, renderedNodeIds, tuning.affinities, tuning.follows, visibleEdges]);
   const nodeById = useMemo(() => new Map(visibleNodes.map((node) => [node.id, node])), [visibleNodes]);
+  const availableExploreIds = useMemo(() => new Set(graphNodes.map((node) => node.id)), [graphNodes]);
+  const activeExploreTrail = useMemo(() => pruneExploreTrail(exploreTrail, availableExploreIds), [availableExploreIds, exploreTrail]);
   const selected = selectedId ? nodeById.get(selectedId) ?? null : null;
-  const selectedConnections = useMemo(() => renderedEdges
-    .filter((edge) => edge.from === selectedId || edge.to === selectedId)
-    .map((edge) => ({
-      edge,
-      neighbor: nodeById.get(edge.from === selectedId ? edge.to : edge.from),
-    }))
-    .filter((item): item is { edge: Edge; neighbor: StimNode } => Boolean(item.neighbor))
-    .sort((first, second) => second.edge.weight - first.edge.weight)
-    .slice(0, 8), [nodeById, renderedEdges, selectedId]);
+  const readerIndex = useMemo(() => buildExploreIndex(view === 'blend' ? blendedGraph.nodes : graphNodes, activeEdges), [activeEdges, blendedGraph.nodes, graphNodes, view]);
+  const selectedConnections = useMemo(() => selectedId ? exploreConnections(readerIndex, selectedId)
+    .map(({ node, edge }) => ({ neighbor: node, edge })) : [], [readerIndex, selectedId]);
+  const supportingPosts = selectedConnections.filter(({ neighbor, edge }) => neighbor.kind === 'source' && edge.kind === 'evidence');
+  const relatedIdeas = selectedConnections.filter(({ neighbor }) => neighbor.kind !== 'source').slice(0, 5);
+  const previousConnection = selectedConnections.find(({ neighbor }) => neighbor.id === activeExploreTrail.steps[activeExploreTrail.cursor - 1]);
   const globeBusy = activity?.kind === 'sync' || activity?.kind === 'scout' || activity?.kind === 'enrich' || activity?.kind === 'rss';
-  const showInspector = Boolean(selected) || view !== 'map' || permissionsOpen;
+  const showInspector = view === 'explore'
+    ? permissionsOpen || (Boolean(selected) && exploreDetailsOpen)
+    : Boolean(selected) || view !== 'map' || permissionsOpen;
+  useEffect(() => {
+    if (!showInspector || !selectedId) return;
+    const frame = window.requestAnimationFrame(() => readerTitleRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedId, showInspector]);
   const stageCopy = activity?.kind === 'sync'
     ? {
         eyebrow: 'SYNC',
@@ -1677,7 +1678,7 @@ export default function Home() {
     setFieldScope(data.scope ?? scope);
     setMode('live');
     if (!options?.keepView) {
-      setView('map');
+      setView('explore');
       setSeedGraph(null);
       setNeighborhoodRootId(null);
     }
@@ -1729,13 +1730,17 @@ export default function Home() {
     setTrace((current) => [{ id, at: Date.now(), kind, title, detail }, ...current].slice(0, 48));
   }, []);
 
-  const focusNode = useCallback((id: string, options?: { keepGuide?: boolean }) => {
+  const focusNode = useCallback((id: string, options?: { keepGuide?: boolean; via?: string; keepReader?: boolean }) => {
     if (!options?.keepGuide) setGuideIndex(-1);
     setPermissionsOpen(false);
     setSelectedId(id);
+    setExploreDetailsOpen(Boolean(options?.keepReader));
+    const steps = options?.via ? [options.via, id] : [id];
+    setExploreTrail((current) => visitExploreTrail(pruneExploreTrail(current, availableExploreIds), steps));
+    setExploreVisited((current) => new Set([...current, ...steps]));
     const nearby = collectNeighborhoodIds(id, graphNodes, graphEdges, 1);
     flyTo([...nearby]);
-  }, [flyTo, graphEdges, graphNodes]);
+  }, [availableExploreIds, flyTo, graphEdges, graphNodes]);
 
   const handleSelect = useCallback((id: string | null) => {
     if (id) focusNode(id);
@@ -1748,7 +1753,7 @@ export default function Home() {
   const runGuide = useCallback((delta: 1 | -1) => {
     if (guideStops.length === 0) return;
     setTuning((current) => (current.guides ? current : { ...current, guides: true }));
-    setView('map');
+    setView((current) => current === 'explore' ? 'explore' : 'map');
     setPermissionsOpen(false);
     setPaletteOpen(false);
     setHelpOpen(false);
@@ -1882,8 +1887,22 @@ export default function Home() {
   }, [syncState]);
 
   useEffect(() => {
-    const auth = new URLSearchParams(window.location.search).get('auth');
-    if (auth === 'invalid' || auth === 'failed') window.history.replaceState({}, '', '/');
+    const url = new URL(window.location.href);
+    const auth = url.searchParams.get('auth');
+    if (auth !== 'invalid' && auth !== 'failed' && auth !== 'connected') return;
+    // Apply the browser-only callback result after the first render has hydrated.
+    const frame = window.requestAnimationFrame(() => {
+      setSyncState(auth === 'connected' ? 'idle' : 'error');
+      setSyncMessage(auth === 'invalid'
+        ? 'X connect did not complete. Try Connect X again from the app where you started sign-in.'
+        : auth === 'failed'
+          ? 'X sign-in could not be completed. Check that the configured callback address matches this app.'
+          : 'X connected. Sync your bookmarks to start exploring.');
+      setPermissionsOpen(true);
+      url.searchParams.delete('auth');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -1976,8 +1995,10 @@ export default function Home() {
               scout_count: 0,
               following_count: 0,
             });
-            setView('map');
+            setView('explore');
             setSelectedId(capsule.rootId);
+            setExploreTrail({ steps: capsule.rootId ? [capsule.rootId] : [], cursor: capsule.rootId ? 0 : -1 });
+            setExploreVisited(new Set(capsule.rootId ? [capsule.rootId] : []));
             setCapsuleMessage('Connect X to lay this on your map, or combine it with the demo.');
           }
         } else if (status.connected && !graphData) {
@@ -2044,8 +2065,13 @@ export default function Home() {
           setHelpOpen(false);
           return;
         }
+        if (exploreDetailsOpen) {
+          setExploreDetailsOpen(false);
+          return;
+        }
         if (selectedId) {
           setSelectedId(null);
+          setExploreTrail((current) => ({ ...current, cursor: -1 }));
           setGuideIndex(-1);
           return;
         }
@@ -2064,7 +2090,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [helpOpen, paletteOpen, permissionsOpen, selectedId]);
+  }, [exploreDetailsOpen, helpOpen, paletteOpen, permissionsOpen, selectedId]);
 
   useLayoutEffect(() => {
     const savedTuning = readStoredTuning();
@@ -2314,6 +2340,12 @@ export default function Home() {
     setTuningOpen(false);
     setPermissionsOpen(false);
     setView(nextView);
+    if (nextView === 'explore') {
+      setSelectedId(null);
+      setExploreTrail((current) => ({ ...current, cursor: -1 }));
+      setExploreDetailsOpen(false);
+      return;
+    }
     if (nextView === 'map') {
       setSelectedId(null);
       if (view !== 'map') flyTo(graphNodes.map((node) => node.id));
@@ -2357,12 +2389,18 @@ export default function Home() {
 
   const rediscover = useCallback(() => {
     if (visibleNodes.length === 0) return;
+    if (view === 'explore') {
+      const next = graphNodes.find((node) => node.kind === 'source' && !exploreVisited.has(node.id))
+        ?? graphNodes.find((node) => node.kind === 'topic' && !exploreVisited.has(node.id));
+      if (next) focusNode(next.id);
+      return;
+    }
     const currentIndex = visibleNodes.findIndex((node) => node.id === selectedId);
     const offset = randomOffset(visibleNodes.length - 1);
     const next = visibleNodes[(Math.max(0, currentIndex) + offset) % visibleNodes.length];
     setSelectedId(next.id);
     flyTo([...collectNeighborhoodIds(next.id, visibleNodes, visibleEdges, 1)]);
-  }, [flyTo, selectedId, visibleEdges, visibleNodes]);
+  }, [exploreVisited, flyTo, focusNode, graphNodes, selectedId, view, visibleEdges, visibleNodes]);
 
   const seedNeighborhood = useCallback(() => {
     const root = selectedId ?? neighborhoodRootId ?? graphNodes.find((node) => node.kind === 'topic')?.id;
@@ -2398,7 +2436,7 @@ export default function Home() {
       if (event.key.toLowerCase() === 'h') {
         event.preventDefault();
         setGuideIndex(-1);
-        enterView('map');
+        enterView('explore');
         return;
       }
       if (event.key.toLowerCase() === 'n') {
@@ -2414,6 +2452,7 @@ export default function Home() {
     setPaletteOpen(false);
     if (hit.kind === 'command') {
       if (hit.id === 'cmd:guide') runGuide(1);
+      else if (hit.id === 'cmd:explore') enterView('explore');
       else if (hit.id === 'cmd:keys') setHelpOpen(true);
       else if (hit.id === 'cmd:map') enterView('map');
       else if (hit.id === 'cmd:people') enterView('people');
@@ -2438,7 +2477,8 @@ export default function Home() {
       else if (hit.id === 'cmd:sync') void syncBookmarks();
       return;
     }
-    if (hit.kind === 'person') setView('people');
+    if (view === 'explore') setView('explore');
+    else if (hit.kind === 'person') setView('people');
     else if (hit.kind === 'topic') setView('threads');
     else if (hit.kind === 'source') setView('bookmarks');
     else if (hit.kind === 'scout') setView('scout');
@@ -2488,7 +2528,7 @@ export default function Home() {
   };
 
   const makeShareCapsule = (): GraphCapsule | null => {
-    const nonBookmarkNodes = graphNodes.filter((node) => node.kind !== 'source' && node.kind !== 'scout');
+    const nonBookmarkNodes = graphNodes.filter((node) => node.kind !== 'source' && node.kind !== 'scout' && !isSelf(node));
     const nonBookmarkIds = new Set(nonBookmarkNodes.map((node) => node.id));
     let rootId = selectedId && nonBookmarkIds.has(selectedId) ? selectedId : null;
     if (!rootId && selectedId) {
@@ -2525,7 +2565,7 @@ export default function Home() {
           : 'A Stimgraph demo map',
       rootId,
       nodes: shareNodes,
-      edges: graphEdges.filter((edge) => shareIds.has(edge.from) && shareIds.has(edge.to)).slice(0, 240),
+      edges: graphEdges.filter((edge) => shareIds.has(edge.from) && shareIds.has(edge.to) && edge.kind !== 'follows').slice(0, 240),
     };
   };
 
@@ -2603,7 +2643,10 @@ export default function Home() {
     setLiveInserted(0);
     setXReads(0);
     setScoutMessage('');
-    setView('map');
+    setView('explore');
+    setExploreTrail({ steps: [], cursor: -1 });
+    setExploreVisited(new Set());
+    setExploreDetailsOpen(false);
     setSeedGraph(null);
     setFieldScope('overview');
     setNeighborhoodRootId(null);
@@ -2613,7 +2656,7 @@ export default function Home() {
   };
 
   const deleteLocalData = async () => {
-    const confirmed = window.confirm('Delete this local Stimgraph map and disconnect X? This cannot be undone.');
+    const confirmed = window.confirm('Delete this local Stimgraph map, saved trajectories, and disconnect X? This cannot be undone.');
     if (!confirmed) return;
     const response = await fetch('/api/data', { method: 'DELETE' });
     if (!response.ok) {
@@ -2624,6 +2667,28 @@ export default function Home() {
     setSyncMessage('');
     setEnrichMessage('');
     await disconnect();
+  };
+
+  const connectX = async () => {
+    setConnecting(true);
+    try {
+      const response = await fetchWithTimeout('/api/auth/x/status', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Could not check X sign-in. Try again in a moment.');
+      const status = await response.json() as ConnectionState;
+      setConnection(status);
+      if (status.configured === false) {
+        throw new Error('X sign-in is not set up for this copy of Stimgraph. You can explore the demo here. To use your bookmarks, open the app where you configured X.');
+      }
+      window.location.assign(sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start');
+    } catch (error) {
+      setSyncState('error');
+      setSyncMessage(error instanceof Error ? error.message : 'X sign-in could not start.');
+      setSelectedId(null);
+      setView('explore');
+      setPermissionsOpen(true);
+    } finally {
+      setConnecting(false);
+    }
   };
 
   return (
@@ -2639,7 +2704,7 @@ export default function Home() {
 
         <button className="search-box" type="button" onClick={() => { setPaletteIndex(0); setPaletteOpen(true); setHelpOpen(false); }} aria-label="Search topics, people, and posts">
           <span aria-hidden="true">⌕</span>
-          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Search topics, people, posts'}</span>
+          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Search · @ # ~ :'}</span>
           <kbd>⌘K</kbd>
         </button>
 
@@ -2664,7 +2729,7 @@ export default function Home() {
                 : `Sync @${connection.profile?.username ?? 'X'}`}
             </button>
           ) : (
-            <a className="connect-button" href={sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start'}>Connect X</a>
+            <button className="connect-button sync-button" type="button" onClick={() => void connectX()} disabled={connecting}>{connecting ? 'Checking X…' : 'Connect X'}</button>
           )}
         </div>
       </header>
@@ -2672,7 +2737,8 @@ export default function Home() {
       <section className="workspace">
         <aside className="left-rail" aria-label="Graph navigation">
           <nav>
-            <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>⌘</span>Map</button>
+            <button className={`rail-item ${view === 'explore' ? 'active' : ''}`} type="button" onClick={() => enterView('explore')}><span>✧</span>Explore</button>
+            <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>◎</span>Globe</button>
             <button className={`rail-item ${view === 'people' ? 'active' : ''}`} type="button" onClick={() => enterView('people')}><span>◎</span>People</button>
             <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Topics</button>
             <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Bookmarks</button>
@@ -2702,13 +2768,13 @@ export default function Home() {
           </button>
         </aside>
 
-        <div className={`graph-stage palette-${tuning.palette}`}>
-          <div className={`stage-heading ${tuning.guides ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides}>
+        <div className={`graph-stage palette-${tuning.palette} ${view === 'explore' ? 'explore-stage' : ''}`}>
+          <div className={`stage-heading ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides || view === 'explore'}>
             <p className="eyebrow">{stageCopy.eyebrow}</p>
             <h1>{stageCopy.title}</h1>
             <p>{stageCopy.detail}</p>
           </div>
-          <div className={`field-readout ${activity ? 'busy' : ''}`} aria-live="polite">
+          <div className={`field-readout ${activity ? 'busy' : ''} ${view === 'explore' && !activity ? 'guide-hidden' : ''}`} aria-live="polite">
             {activity ? (
               <>
                 <span>{activity.label}{activity.current != null ? `  ${activity.current}/${activity.total}` : ''}</span>
@@ -2728,8 +2794,37 @@ export default function Home() {
               : undefined}
             />
           </div>
-          <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} query={deferredQuery} tuning={viewTuning} freshIds={freshIds} busy={globeBusy} frameToken={frameToken} frameIds={frameIds} onSelect={handleSelect} />
-          <div className={`legend ${tuning.guides ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides}>
+          <TrajectoryWorkbench
+            key={`${mode}:${connection.profile?.id ?? shareName ?? 'demo'}`}
+            nodes={graphNodes} edges={graphEdges} trail={activeExploreTrail} visited={exploreVisited}
+            mode={mode} hidden={view !== 'explore'}
+            onResume={(next) => {
+              setExploreTrail(next);
+              setSelectedId(next.steps[next.cursor] ?? null);
+              setExploreVisited((current) => new Set([...current, ...next.steps]));
+              setExploreDetailsOpen(false);
+              setPermissionsOpen(false);
+              setGuideIndex(-1);
+            }}
+          />
+          {view === 'explore' ? <ExploreGraph
+            orientation={exploreOrientation} onOrientationChange={setExploreOrientation}
+            nodes={graphNodes} edges={graphEdges} selectedId={selectedId} trail={activeExploreTrail} visited={exploreVisited} mode={mode} theme={theme}
+            shortcutsBlocked={paletteOpen || helpOpen || tuningOpen || showInspector}
+            onSelect={(id, via) => focusNode(id, { via })}
+            onTravel={(cursor) => {
+              const id = activeExploreTrail.steps[cursor];
+              if (!id || !nodeById.has(id)) return;
+              setExploreTrail({ ...activeExploreTrail, cursor });
+              setSelectedId(id);
+              setExploreDetailsOpen(false);
+            }}
+            onHome={() => enterView('explore')}
+            onInspect={() => setExploreDetailsOpen(true)}
+            onSearch={() => { setPaletteIndex(0); setPaletteOpen(true); }}
+            onScout={() => enterView('scout')}
+          /> : <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} searchNeedleRef={searchNeedleRef} tuning={viewTuning} freshIds={freshIds} busy={globeBusy} frameToken={frameToken} frameIds={frameIds} onSelect={handleSelect} />}
+          <div className={`legend ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides || view === 'explore'}>
             {view === 'blend' && seedGraph ? (
               <>
                 <span><i className="local-dot" />Yours</span>
@@ -2739,11 +2834,13 @@ export default function Home() {
             ) : (
               <>
                 <span><i className="topic-dot" />Topic</span>
+                <span><i className="self-dot" />You</span>
                 <span><i className="person-dot" />Person</span>
                 <span><i className="follow-dot" />Following</span>
                 <span><i className="source-dot" />Bookmark</span>
                 <span><i className="scout-dot" />Scout</span>
-                <span className="affinity-key"><i />Affinity</span>
+                <span className="affinity-key"><i />Overlap</span>
+                <span className="follows-key"><i />Follows</span>
               </>
             )}
           </div>
@@ -2773,6 +2870,9 @@ export default function Home() {
               <span>CONNECTIONS</span>
               <button className={`tuning-toggle ${tuning.affinities ? 'active' : ''}`} type="button" aria-pressed={tuning.affinities} onClick={() => setTuning((current) => ({ ...current, affinities: !current.affinities }))}>
                 <i /> Overlap links
+              </button>
+              <button className={`tuning-toggle ${tuning.follows ? 'active' : ''}`} type="button" aria-pressed={tuning.follows} onClick={() => setTuning((current) => ({ ...current, follows: !current.follows }))}>
+                <i /> Following links
               </button>
               <button className={`tuning-toggle ${tuning.guides ? 'active' : ''}`} type="button" aria-pressed={tuning.guides} onClick={() => setTuning((current) => ({ ...current, guides: !current.guides }))}>
                 <i /> Headings and legend
@@ -2805,63 +2905,38 @@ export default function Home() {
           </section>
 
           {showInspector ? (
-          <aside className={`inspector ${selected || view !== 'map' ? 'has-selection' : ''}`} aria-live="polite">
+          <aside className={`inspector ${selected || view !== 'map' ? 'has-selection' : ''} ${selected ? 'reader-panel' : ''}`} aria-label={selected ? 'Bookmark reader and connections' : 'Map details and settings'}>
           {selected ? (
             <>
               <div className="inspector-topline">
                 <div className="focus-badges">
-                  <span className={`kind-badge ${selected.kind}`}>{selected.kind === 'source' ? 'bookmark' : selected.kind === 'scout' ? 'scout' : selected.kind}</span>
-                  {selected.origin ? <span className={`origin-badge ${selected.origin}`}>{selected.origin === 'bridge' ? 'shared' : selected.origin}</span> : null}
+                  <span className={`kind-badge ${isSelf(selected) ? 'self' : selected.kind}`}>{isSelf(selected) ? 'you' : selected.kind === 'source' ? 'bookmark' : selected.kind === 'scout' ? 'scout' : selected.kind}</span>
+                  {selected.origin === 'seed' || selected.origin === 'bridge' ? <span className={`origin-badge ${selected.origin}`}>{selected.origin === 'bridge' ? 'on both maps' : 'shared with you'}</span> : null}
                   {selected.followed ? <span className="origin-badge following">following</span> : null}
                 </div>
-                <button type="button" onClick={() => setSelectedId(null)} aria-label="Close details">×</button>
+                <button type="button" onClick={() => view === 'explore' ? setExploreDetailsOpen(false) : setSelectedId(null)} aria-label="Close details">×</button>
               </div>
-              <div className="selected-orb" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette, theme) } as React.CSSProperties} />
-              <h2>{selected.label}</h2>
-              <p className="inspector-note">{selected.note}</p>
-              {selected.url ? <a className="node-link" href={selected.url} target="_blank" rel="noreferrer">Open on X ↗</a> : null}
+              <p className="reader-purpose">{selected.kind === 'source' ? 'Read the saved post and follow the ideas inside it.' : 'See what connects here and the saved posts behind it.'}</p>
+              <h2 ref={readerTitleRef} tabIndex={-1}>{selected.label}</h2>
+              <p className={`inspector-note ${selected.kind === 'source' ? 'reader-saved-text' : ''}`}>{selected.note}</p>
+              {selected.url ? <a className="reader-open-link" href={selected.url} target="_blank" rel="noreferrer">{selected.kind === 'source' ? 'Open original saved post' : selected.kind === 'person' ? 'Open profile' : 'Open original'} ↗</a> : null}
 
               <div className="focus-evidence">
-                <span>WHY IT IS HERE</span>
+                <span>{previousConnection ? 'HOW YOU GOT HERE' : 'FROM YOUR COLLECTION'}</span>
+                {previousConnection ? <strong>{connectionReason(previousConnection.neighbor, selected, previousConnection.edge)} · {previousConnection.neighbor.label}</strong> : null}
                 <strong>{selected.evidence}</strong>
               </div>
 
-              <section className="focus-orbit" aria-label="Nearby nodes">
-                <p className="eyebrow">NEARBY</p>
-                <div className="orbit-field">
-                  <div className="orbit-ring ring-one" />
-                  <div className="orbit-ring ring-two" />
-                  <div className="orbit-core" style={{ '--orb-color': tunedNodeColor(selected, tuning.palette, theme) } as React.CSSProperties}>
-                    <i />
-                    <span>focus</span>
-                  </div>
-                  {selectedConnections.map(({ edge, neighbor }, index) => {
-                    const angle = -90 + (360 / Math.max(1, selectedConnections.length)) * index;
-                    const radians = angle * Math.PI / 180;
-                    const left = 50 + Math.cos(radians) * 38;
-                    const top = 51 + Math.sin(radians) * 38;
-                    return (
-                      <span className="orbit-item" key={`${edge.from}:${edge.to}`}>
-                        <i
-                          className={`orbit-spoke ${edge.kind}`}
-                          style={{ '--angle': `${angle}deg`, '--strength': edge.weight } as React.CSSProperties}
-                        />
-                        <button
-                          className={`orbit-node ${neighbor.kind}`}
-                          style={{ left: `${left}%`, top: `${top}%`, '--node-color': tunedNodeColor(neighbor, tuning.palette, theme) } as React.CSSProperties}
-                          type="button"
-                          onClick={() => focusNode(neighbor.id)}
-                          aria-label={`${neighbor.label}, ${edge.kind === 'affinity' ? 'shared pattern' : `${Math.round(edge.weight * 100)} percent evidence`}`}
-                        >
-                          <i />
-                          <b>{neighbor.label}</b>
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
-              </section>
-
+              {supportingPosts.length ? <section className="reader-connections" aria-label="Saved posts behind this">
+                <h3>Saved posts behind this <span>{supportingPosts.length}</span></h3>
+                {supportingPosts.slice(0, 4).map(({ neighbor }) => <button key={neighbor.id} type="button" onClick={() => { setView(availableExploreIds.has(neighbor.id) ? 'explore' : 'blend'); focusNode(neighbor.id, { keepReader: true }); }}><strong>{neighbor.label}</strong><span className="reader-excerpt">{neighbor.note}</span><small>Read bookmark →</small></button>)}
+              </section> : mode === 'shared' ? <p className="reader-empty-note">Saved post text is not included in this shared graph.</p> : null}
+              {relatedIdeas.length ? <section className="reader-connections" aria-label="Connected ideas">
+                <h3>Connected ideas</h3>
+                {relatedIdeas.map(({ neighbor, edge }) => <button key={neighbor.id} type="button" onClick={() => { setView(availableExploreIds.has(neighbor.id) ? 'explore' : 'blend'); focusNode(neighbor.id, { keepReader: true }); }}><strong>{neighbor.label}</strong><small>{activeExploreTrail.steps.slice(0, activeExploreTrail.cursor + 1).includes(neighbor.id) ? 'Return to this step on your trail' : connectionReason(selected, neighbor, edge)} →</small></button>)}
+              </section> : null}
+              <button className="reader-return" type="button" onClick={() => { setView(availableExploreIds.has(selected.id) ? 'explore' : 'blend'); focusNode(selected.id); }}>Continue on the canvas →</button>
+              <details className="reader-more"><summary>More actions</summary>
               <div className="focus-actions">
                 <button type="button" onClick={seedNeighborhood}>Grow from here</button>
                 {view === 'neighborhood' && neighborhoodDepth < 4 ? <button type="button" onClick={growNeighborhood}>+ one step</button> : null}
@@ -2873,10 +2948,11 @@ export default function Home() {
                 {mode === 'shared' && connection.connected ? <button type="button" onClick={() => void loadLiveGraph()}>Open my map</button> : null}
                 {seedGraph ? <button type="button" onClick={clearCombination}>Separate graphs</button> : null}
               </div>
+              </details>
               {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
               {shareUrl ? <a className="node-link" href={shareUrl}>{shareUrl.replace(/^https?:\/\//, '')}</a> : null}
             </>
-          ) : view !== 'map' ? (
+          ) : view !== 'map' && view !== 'explore' ? (
             <div className="view-panel">
               <p className="eyebrow">{view === 'people' ? 'PEOPLE' : view === 'threads' ? 'TOPICS' : view === 'bookmarks' ? 'BOOKMARKS' : view === 'scout' ? 'GROK SCOUT' : view === 'neighborhood' ? 'NEIGHBORHOOD' : view === 'feeds' ? 'RSS' : 'COMBINED MAP'}</p>
               <h2>{view === 'people' ? 'Authors and accounts you follow.' : view === 'threads' ? 'Topics.' : view === 'bookmarks' ? 'Saved posts.' : view === 'scout' ? 'Suggested posts.' : view === 'neighborhood' ? 'This neighborhood.' : view === 'feeds' ? 'Linked sites and feeds.' : seedGraph ? `Yours and ${seedGraph.name}` : 'Combine two graphs.'}</h2>
@@ -2961,7 +3037,7 @@ export default function Home() {
                     : 'Sync bookmarks and following'}
                 </button>
               ) : (
-                <a className="wide-connect" href={sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start'}>Review and connect X</a>
+                <button className="wide-connect" type="button" onClick={() => void connectX()} disabled={connecting}>{connecting ? 'Checking X…' : 'Review and connect X'}</button>
               )}
               {syncMessage ? <p className={`sync-message ${syncState}`}>{syncMessage}</p> : null}
               {syncMessage.includes('Reconnect X') ? <a className="node-link" href="/api/auth/x/start">Reconnect X to grant follows.read ↗</a> : null}
@@ -3074,7 +3150,7 @@ export default function Home() {
                 ref={paletteInputRef}
                 value={query}
                 onChange={(event) => { setQuery(event.target.value); setPaletteIndex(0); }}
-                placeholder="@person  #topic  :command"
+                placeholder="@person  #topic  ~following  :command"
                 aria-label="Filter topics, people, and posts"
                 autoComplete="off"
                 spellCheck={false}
@@ -3101,6 +3177,7 @@ export default function Home() {
             <div className="palette-foot">
               <span>@ people</span>
               <span># topics</span>
+              <span>~ following</span>
               <span>: cmds</span>
               <span className="spacer" />
               <span>{paletteHits.length} hits</span>
@@ -3114,12 +3191,15 @@ export default function Home() {
             <p className="eyebrow">KEYS</p>
             <h2>Guide and search</h2>
             <dl>
+              <div><dt><kbd>{exploreOrientation === 'LR' ? '↑ ↓' : '← →'}</kbd></dt><dd>Choose an exploration branch</dd></div>
+              <div><dt><kbd>{exploreOrientation === 'LR' ? '→' : '↓'}</kbd></dt><dd>Follow the chosen branch</dd></div>
+              <div><dt><kbd>{exploreOrientation === 'LR' ? '←' : '↑'}</kbd></dt><dd>Back along your trail</dd></div>
               <div><dt><kbd>G</kbd></dt><dd>Walk the strongest nodes</dd></div>
               <div><dt><kbd>⇧G</kbd></dt><dd>Previous stop</dd></div>
               <div><dt><kbd>R</kbd></dt><dd>Jump somewhere new</dd></div>
-              <div><dt><kbd>H</kbd></dt><dd>Whole map</dd></div>
+              <div><dt><kbd>H</kbd></dt><dd>All interests</dd></div>
               <div><dt><kbd>N</kbd></dt><dd>Neighborhood from focus</dd></div>
-              <div><dt><kbd>/</kbd></dt><dd>Search · @ people · # topics · : commands</dd></div>
+              <div><dt><kbd>/</kbd></dt><dd>Search · @ people · # topics · ~ following · : commands</dd></div>
               <div><dt><kbd>T</kbd></dt><dd>Graph controls</dd></div>
               <div><dt><kbd>L</kbd></dt><dd>Activity log</dd></div>
               <div><dt><kbd>?</kbd></dt><dd>This list</dd></div>

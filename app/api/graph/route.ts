@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { loadGraph } from '@/db/storage';
+import { SELF_NODE_ID, buildFollowsEdges, withSearchLabel } from '@/lib/graph-model';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 
 export const dynamic = 'force-dynamic';
@@ -93,6 +94,18 @@ export async function GET(request: NextRequest) {
       followed: true,
     })),
   ];
+  const youNode = withSearchLabel({
+    id: SELF_NODE_ID,
+    label: `You · @${active.session.profile.username}`,
+    kind: 'person' as const,
+    x: 0.5,
+    y: 0.5,
+    size: 10,
+    color: '#f2f2f0',
+    note: 'This map is yours. Solid lines are saved posts. Dotted overlap is shared topics. Hairlines are accounts you follow.',
+    evidence: 'You · this map',
+    self: true,
+  });
   const authorById = new Map(authorNodes.map((node) => [node.id.slice('person:'.length), node]));
   const sourceNodes = data.bookmarks.map((bookmark) => {
     const author = authorById.get(bookmark.author_id);
@@ -107,7 +120,7 @@ export async function GET(request: NextRequest) {
       y: clamp(anchor.y + Math.sin(angle) * distance * 0.72, 0.05, 0.95),
       size: 3 + hashUnit(bookmark.post_id, 47) * 1.8,
       color: '#6a6a66',
-      note: bookmark.text.slice(0, 320),
+      note: bookmark.text,
       evidence: `Saved from @${bookmark.author_username}${bookmark.created_at ? ` · ${new Date(bookmark.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}` : ''}`,
       url: `https://x.com/${bookmark.author_username}/status/${bookmark.post_id}`,
     };
@@ -126,12 +139,12 @@ export async function GET(request: NextRequest) {
       y: clamp(anchor.y + Math.sin(angle) * distance * 0.7, 0.05, 0.95),
       size: 4.2 + hashUnit(scout.post_id, 11) * 1.4,
       color: '#7ee0ff',
-      note: scout.text.slice(0, 320),
+      note: scout.text,
       evidence: `Scouted · ${scout.topic_label} · ${scout.confidence}% · ${scout.reason}`,
       url: scout.url ?? `https://x.com/${scout.author_username}/status/${scout.post_id}`,
     };
   });
-  const available = new Set([...topicNodes, ...authorNodes, ...sourceNodes, ...scoutNodes].map((node) => node.id));
+  const available = new Set([youNode, ...topicNodes, ...authorNodes, ...sourceNodes, ...scoutNodes].map((node) => node.id));
   const authorTopicEdges = data.connections
     .map((connection) => ({
       from: `person:${connection.author_id}`,
@@ -180,12 +193,15 @@ export async function GET(request: NextRequest) {
       kind: 'affinity' as const,
     }))
     .filter((edge) => available.has(edge.from) && available.has(edge.to));
+  const followsEdges = buildFollowsEdges(SELF_NODE_ID, authorNodes);
 
   return withRenewedSession(NextResponse.json({
-    nodes: [...topicNodes, ...authorNodes, ...sourceNodes, ...scoutNodes],
-    edges: [...authorTopicEdges, ...bookmarkAuthorEdges, ...bookmarkTopicEdges, ...topicAffinityEdges, ...authorAffinityEdges, ...scoutTopicEdges],
+    nodes: [youNode, ...topicNodes, ...authorNodes, ...sourceNodes, ...scoutNodes].map((node) => (
+      'searchLabel' in node && node.searchLabel ? node : withSearchLabel(node)
+    )),
+    edges: [...authorTopicEdges, ...bookmarkAuthorEdges, ...bookmarkTopicEdges, ...topicAffinityEdges, ...authorAffinityEdges, ...scoutTopicEdges, ...followsEdges],
     totals: data.totals,
     scope,
     profile: active.session.profile,
-  }), active.renewedCookie);
+  }), request, active.renewedCookie);
 }

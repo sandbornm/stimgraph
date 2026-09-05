@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     return withRenewedSession(NextResponse.json({
       found: 0,
       message: 'Analyze bookmarks with Grok so topics exist, then scout.',
-    }), active.renewedCookie);
+    }), request, active.renewedCookie);
   }
 
   try {
@@ -30,9 +30,9 @@ export async function POST(request: NextRequest) {
       finds: result.finds,
       estimatedCostUsd: Number(result.estimatedCostUsd.toFixed(4)),
       zeroDataRetention: result.zeroDataRetention,
-    }), active.renewedCookie);
+    }), request, active.renewedCookie);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Grok scout failed.';
-    return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), active.renewedCookie);
+    return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), request, active.renewedCookie);
   }
 }

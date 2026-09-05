@@ -131,3 +131,55 @@ export const shares = sqliteTable(
     index('idx_shares_owner_created').on(table.ownerId, table.createdAt),
   ],
 );
+
+export const oauthPending = sqliteTable('oauth_pending', {
+  state: text('state').primaryKey(),
+  verifier: text('verifier').notNull(),
+  returnPath: text('return_path'),
+  createdAt: integer('created_at').notNull(),
+});
+
+export const bridgeRequests = sqliteTable('bridge_requests', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [index('idx_bridge_requests_owner_created').on(table.ownerId, table.createdAt)]);
+
+export const trajectories = sqliteTable('trajectories', {
+  ownerId: text('owner_id').notNull(),
+  id: text('id').notNull(),
+  name: text('name').notNull(),
+  question: text('question').notNull(),
+  stepsJson: text('steps_json').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.ownerId, table.id] }),
+  index('idx_trajectories_owner_created').on(table.ownerId, table.createdAt),
+]);
+
+export const researchCards = sqliteTable('research_cards', {
+  ownerId: text('owner_id').notNull(),
+  id: text('id').notNull(),
+  cardJson: text('card_json').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [primaryKey({ columns: [table.ownerId, table.id] }), index('idx_research_cards_owner_created').on(table.ownerId, table.createdAt)]);
+
+export const researchRequests = sqliteTable('research_requests', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id').notNull(),
+  kind: text('kind').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [index('idx_research_requests_owner_kind_created').on(table.ownerId, table.kind, table.createdAt)]);
+
+export const xSessions = sqliteTable(
+  'x_sessions',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    payload: text('payload').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('idx_x_sessions_owner').on(table.ownerId)],
+);

@@ -44,5 +44,5 @@ export async function POST(request: NextRequest) {
   const site = getRuntimeValue('NEXT_PUBLIC_SITE_URL') ?? request.nextUrl.origin;
   const url = `${site.replace(/\/$/, '')}/s/${id}`;
   const response = NextResponse.json({ id, url, name: capsule.name, nodes: capsule.nodes.length });
-  return active ? withRenewedSession(response, active.renewedCookie) : response;
+  return active ? withRenewedSession(response, request, active.renewedCookie) : response;
 }

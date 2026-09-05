@@ -133,6 +133,45 @@ export async function ensureSchema() {
       capsule_json TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS oauth_pending (
+      state TEXT PRIMARY KEY NOT NULL,
+      verifier TEXT NOT NULL,
+      return_path TEXT,
+      created_at INTEGER NOT NULL
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS trajectories (
+      owner_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      question TEXT NOT NULL,
+      steps_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, id)
+    )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS bridge_requests (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bridge_requests_owner_created ON bridge_requests(owner_id, created_at)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_trajectories_owner_created ON trajectories(owner_id, created_at)'),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_cards (
+      owner_id TEXT NOT NULL, id TEXT NOT NULL, card_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY (owner_id, id)
+    )`),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_research_cards_owner_created ON research_cards(owner_id, created_at)'),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS research_requests (
+      id TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL
+    )`),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_research_requests_owner_kind_created ON research_requests(owner_id, kind, created_at)'),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS x_sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
@@ -141,8 +180,79 @@ export async function ensureSchema() {
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_follows_owner_username ON follows(owner_id, username)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_feeds_owner_status ON feeds(owner_id, status)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_x_sessions_owner ON x_sessions(owner_id)'),
   ]);
   initialized = true;
+}
+
+const OAUTH_PENDING_TTL_MS = 10 * 60 * 1000;
+export const X_SESSION_TTL_MS = 60 * 60 * 24 * 180 * 1000;
+
+export async function saveOauthPending(state: string, verifier: string, returnPath: string | null) {
+  await ensureSchema();
+  const d1 = getD1();
+  const now = Date.now();
+  await d1.batch([
+    d1.prepare('DELETE FROM oauth_pending WHERE created_at < ?').bind(now - OAUTH_PENDING_TTL_MS),
+    d1.prepare(
+      'INSERT INTO oauth_pending (state, verifier, return_path, created_at) VALUES (?, ?, ?, ?)',
+    ).bind(state, verifier, returnPath, now),
+  ]);
+}
+
+export async function takeOauthPending(state: string): Promise<{ verifier: string; returnPath: string | null } | null> {
+  await ensureSchema();
+  const d1 = getD1();
+  const row = await d1.prepare(
+    'SELECT verifier, return_path, created_at FROM oauth_pending WHERE state = ?',
+  ).bind(state).first<{ verifier: string; return_path: string | null; created_at: number }>();
+  await d1.prepare('DELETE FROM oauth_pending WHERE state = ?').bind(state).run();
+  if (!row || row.created_at < Date.now() - OAUTH_PENDING_TTL_MS) return null;
+  return { verifier: row.verifier, returnPath: row.return_path };
+}
+
+export async function replaceXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
+  await ensureSchema();
+  const d1 = getD1();
+  const now = Date.now();
+  await d1.batch([
+    d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
+    d1.prepare(
+      'INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(id, ownerId, payload, expiresAt, now, now),
+  ]);
+}
+
+export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
+  await ensureSchema();
+  const now = Date.now();
+  await getD1().prepare(
+    `INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       payload = excluded.payload,
+       expires_at = excluded.expires_at,
+       updated_at = excluded.updated_at,
+       owner_id = excluded.owner_id`,
+  ).bind(id, ownerId, payload, expiresAt, now, now).run();
+}
+
+export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT payload, owner_id, expires_at FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ payload: string; owner_id: string; expires_at: number }>();
+  if (!row) return null;
+  if (row.expires_at < Date.now()) {
+    await deleteXSessionRecord(id);
+    return null;
+  }
+  return { payload: row.payload, ownerId: row.owner_id, expiresAt: row.expires_at };
+}
+
+export async function deleteXSessionRecord(id: string) {
+  await ensureSchema();
+  await getD1().prepare('DELETE FROM x_sessions WHERE id = ?').bind(id).run();
 }
 
 function topicId(label: string) {
@@ -684,6 +794,11 @@ export async function deleteOwnerData(ownerId: string) {
     d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM trajectories WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM bridge_requests WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM research_cards WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM research_requests WHERE owner_id = ?').bind(ownerId),
+    d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
     d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
   ]);
 }

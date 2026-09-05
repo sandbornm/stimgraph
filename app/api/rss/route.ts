@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   const active = await getActiveXSession(request);
   if (!active) return NextResponse.json({ feeds: [], demo: true });
   const feeds = await loadFeeds(active.session.profile.id);
-  return withRenewedSession(NextResponse.json({ feeds, demo: false }), active.renewedCookie);
+  return withRenewedSession(NextResponse.json({ feeds, demo: false }), request, active.renewedCookie);
 }
 
 const MAX_RSS_HOSTS = 12;
@@ -85,5 +85,5 @@ export async function POST(request: NextRequest) {
       'Cache-Control': 'no-store',
     },
   });
-  return active ? withRenewedSession(response, active.renewedCookie) : response;
+  return active ? withRenewedSession(response, request, active.renewedCookie) : response;
 }

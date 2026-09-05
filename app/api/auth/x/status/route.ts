@@ -1,18 +1,19 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { openXSession, X_SESSION_COOKIE } from '@/lib/x-session';
+import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
+import { getRuntimeValue } from '@/lib/runtime-env';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-  const encrypted = request.cookies.get(X_SESSION_COOKIE)?.value;
-  if (!encrypted) return NextResponse.json({ connected: false });
-  const session = await openXSession(encrypted);
-  if (!session) return NextResponse.json({ connected: false });
+  const configured = ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'X_REDIRECT_URI'].every((name) => Boolean(getRuntimeValue(name)));
+  const active = await getActiveXSession(request);
+  if (!active) return NextResponse.json({ connected: false, configured });
 
-  return NextResponse.json({
+  return withRenewedSession(NextResponse.json({
     connected: true,
-    profile: session.profile,
-    expiresAt: session.expiresAt,
-  });
+    configured,
+    profile: active.session.profile,
+    expiresAt: active.session.expiresAt,
+  }), request, active.renewedCookie);
 }

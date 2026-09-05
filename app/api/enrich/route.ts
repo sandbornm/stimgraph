@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
   if (bookmarks.length === 0) {
     return withRenewedSession(
       NextResponse.json({ analyzed: 0, topics: 0, message: 'No new bookmarks need enrichment.' }),
+      request,
       active.renewedCookie,
     );
   }
@@ -45,9 +46,9 @@ export async function POST(request: NextRequest) {
       topics,
       estimatedCostUsd: Number(result.estimatedCostUsd.toFixed(4)),
       zeroDataRetention: result.zeroDataRetention,
-    }), active.renewedCookie);
+    }), request, active.renewedCookie);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Grok enrichment failed.';
-    return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), active.renewedCookie);
+    return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), request, active.renewedCookie);
   }
 }
