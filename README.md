@@ -4,7 +4,13 @@ Stimgraph helps you explore saved material, connect ideas, and develop research 
 
 The map shows each saved post as a small particle near its author and topics. Solid lines trace direct bookmark evidence. Dotted lines show authors or topics that overlap across saved posts; those lines do not change the source ranking. Cyan diamonds are Grok scout finds: posts on X that fit the map but are not bookmarks yet.
 
-Explore opens with a flat branching view. Start with a topic or bookmark, then follow its connections and preview one step beyond. Choose LR (left to right) or TB (top to bottom). In LR, ↑/↓ chooses a branch, → follows it, and ← goes back. In TB, ←/→ chooses, ↓ follows, and ↑ goes back. The visible arrow pad uses the same controls. Open the reader for full saved text, supporting posts, and related ideas; sharing and graph tools are under More actions.
+**Bookmarks** is the default view and opens the full imported library, beyond the map's smaller working set. Search saved text, authors, or topic names; open **Filter & sort** to narrow by a topic or **Without topics**, or sort by import time or post publication date. Read the saved text in place, open the original, or choose **Explore connections** to bring that source and its recorded author/topic links onto the map. Search and filters remain in place when you return from Explore.
+
+The main navigation has just **Bookmarks**, **Explore**, and **Tools**. Tools holds the other views, research workspace, X connection and data settings, map appearance, and keyboard help. Research controls stay closed until requested, and successful sync notices clear automatically.
+
+**Sync** checks up to 600 bookmarks at a time. When X provides another page, **Continue import** resumes from that page during the current tab session. A failed import keeps completed pages and reports partial progress; a reload starts a fresh check. **Review new bookmarks** shows items added during this session's manual imports. Resyncing existing posts preserves their import timestamps, so newly imported old posts can surface first. Historical timestamps from before this change reflect their last earlier sync; X does not provide the time you originally bookmarked a post. The map prioritizes recently imported sources too.
+
+Explore opens with a flat branching view. Start with a topic or bookmark, then follow its connections and preview one step beyond. Expand **Layout & keyboard controls** to choose LR (left to right) or TB (top to bottom). In LR, ↑/↓ chooses a branch, → follows it, and ← goes back. In TB, ←/→ chooses, ↓ follows, and ↑ goes back. The arrow pad uses the same controls. Open the reader for full saved text, supporting posts, and related ideas; sharing and graph tools are under More actions. Open **Tools → Research workspace** for trajectories, bridges, and the research bench.
 
 Forward branches exclude items already on the current trail. A branch ends when all its connections lead back; the trail and Back controls still let you revisit earlier items. The trail, orientation, and visited markers last for the current session. New connections append to the current branch list when the graph updates. Globe keeps the original rotating view.
 
@@ -32,7 +38,7 @@ Connect X once. The handshake and tokens live in the local database; the browser
 
 The map is a graph: you at the pole, people and topics around you, saved posts near authors. Solid lines are bookmark evidence. Short dashes are topic/author overlap. Longer dotted hairlines are accounts you follow. Search with `/` or ⌘K; `@` people, `#` topics, `~` following, `:` commands.
 
-X does not expose a bookmark webhook on this API, so a connected tab polls the newest 15 bookmarks every 90 seconds while it is visible. New saves flash on the field. Sync also imports who you follow: those accounts appear as quieter people on the globe, and bookmark authors you already follow are marked. Grok scout is a separate action: it searches X with `x_search` against your top topics, frequent authors, and followed accounts. Optionally keep scouting every 12 minutes while the tab stays open.
+Optional live watch checks the newest 15 bookmarks while the tab is visible, starting at 90-second intervals and backing off when nothing changes. New saves flash on the field. Use Sync after time away to check beyond that small window. **Sync bookmarks and following** in Permissions also refreshes the accounts you follow; the toolbar's Sync only imports bookmarks. Followed accounts appear as quieter people on the globe, and bookmark authors you already follow are marked. Grok scout is a separate action: it searches X with `x_search` against your top topics, frequent authors, and followed accounts. Optionally keep scouting every 12 minutes while the tab stays open.
 
 You can drag, zoom, select, search, filter by signal type, or jump to a random node. The interaction direction credits [Kat ⊷ the Poet Engineer’s gestural latent-space work](https://x.com/poetengineer__/status/1821654144958202077); the visual design and implementation here are original.
 
@@ -49,6 +55,7 @@ Use Node 22.13 or newer and pnpm.
 3. Set the callback URL to `http://127.0.0.1:3001/api/auth/x/callback`.
 4. Set the website URL to `http://127.0.0.1:3001`.
 5. Put the credentials in `.env.local`, following `.env.example`. Never commit or paste that file into chat.
+   Restrict its permissions with `chmod 600 .env.local`. Git ignores local environment files. The Vite configuration declares the server secret names so the local Cloudflare Worker receives credentials loaded by Vinext; none are client-side defines. Restart the dev server after editing credentials. If login is not configured, the app reports missing variable names without their values.
 6. Install and run:
 
    ```bash
@@ -63,9 +70,16 @@ Required server credentials:
 - `X_CLIENT_ID`: the OAuth 2.0 client ID for the X app.
 - `X_CLIENT_SECRET`: the OAuth 2.0 client secret for the X app.
 - `X_REDIRECT_URI`: exactly `http://127.0.0.1:3001/api/auth/x/callback` for local development.
-- `XAI_API_KEY`: a dedicated xAI API key used for optional topic enrichment, Grok scout, bridges, and research drafts.
+
+Optional: `XAI_API_KEY`, a dedicated xAI API key for topic enrichment, Grok scout, bridges, and research drafts. Bookmark sync works without it.
 
 `NEXT_PUBLIC_SITE_URL` is non-secret and defaults to `http://127.0.0.1:3001` for social metadata.
+
+## Continuous integration
+
+GitHub Actions runs the model/provider tests, ESLint, TypeScript, and the production build on pull requests and pushes to `main`. It uses Node 24, pnpm 10.33.0, the frozen lockfile, disabled dependency lifecycle scripts, and inert credentials. No X, xAI, or Cloudflare secrets are needed for CI; it does not sync bookmarks or deploy the app. A filename-only check rejects tracked local credential files before dependencies are installed.
+
+Local verification must use a clean source copy without local environment files, with inert values supplied directly to the process. Do not run builds against the configured workspace's secret files.
 
 ## Permission boundary
 

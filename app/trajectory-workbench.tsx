@@ -14,11 +14,12 @@ type Props = {
   visited: Set<string>;
   mode: 'demo' | 'live' | 'shared';
   hidden: boolean;
+  onClose: () => void;
   onResume: (trail: ExploreTrail) => void;
 };
 const kindName = { topic: 'Concept', source: 'Saved post', person: 'Person', scout: 'Scout suggestion' };
 
-export function TrajectoryWorkbench({ nodes, edges, trail, visited, mode, hidden, onResume }: Props) {
+export function TrajectoryWorkbench({ nodes, edges, trail, visited, mode, hidden, onResume, onClose }: Props) {
   const index = useMemo(() => buildExploreIndex(nodes, edges), [nodes, edges]);
   const currentSteps = useMemo(() => captureTrajectory(index, trail), [index, trail]);
   const [open, setOpen] = useState(false);
@@ -122,6 +123,7 @@ export function TrajectoryWorkbench({ nodes, edges, trail, visited, mode, hidden
         <button type="button" aria-expanded={researchOpen} aria-controls="research-bench" onClick={() => { setResearchOpen(!researchOpen); setOpen(false); setBridgeOpen(false); }}>Research bench</button>
         <button type="button" aria-expanded={open} aria-controls="trajectory-workspace" onClick={() => { setOpen(!open); setBridgeOpen(false); setResearchOpen(false); setSelected(null); }}>{open ? 'Close outline' : 'Shape this path'} <span aria-hidden="true">↗</span></button>
         <button type="button" aria-expanded={open && libraryOpen} onClick={() => { setOpen(true); setBridgeOpen(false); setResearchOpen(false); setLibraryOpen(!libraryOpen || !open); }}>Saved trajectories <span>{saved.length}</span></button>
+        <button type="button" onClick={onClose} aria-label="Close research tools">×</button>
       </div>
       <ResearchBench index={index} anchorId={trail.steps.slice(0, trail.cursor + 1).findLast((id) => index.nodes.get(id)?.kind === 'source')} mode={mode} hidden={!researchOpen} />
       {bridgeOpen && <ConceptBridges index={index} selectedId={trail.steps[trail.cursor]} mode={mode} onUse={(route, question) => {

@@ -20,7 +20,6 @@ type Props = {
   onHome: () => void;
   onInspect: () => void;
   onSearch: () => void;
-  onScout: () => void;
   shortcutsBlocked: boolean;
   orientation: ExploreOrientation;
   onOrientationChange: (orientation: ExploreOrientation) => void;
@@ -35,7 +34,7 @@ export function ExploreGraph(props: Props) {
   return <ExploreScene key={`${props.mode}:${props.selectedId ?? 'overview'}`} {...props} index={index} />;
 }
 
-function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect, onTravel, onHome, onInspect, onSearch, onScout, shortcutsBlocked, orientation, onOrientationChange }: Props & {
+function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect, onTravel, onHome, onInspect, onSearch, shortcutsBlocked, orientation, onOrientationChange }: Props & {
   index: ReturnType<typeof buildExploreIndex>;
 }) {
   const [page, setPage] = useState(0);
@@ -199,13 +198,13 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
       <header className="explore-header">
         <div>
           <p className="eyebrow">{mode === 'demo' ? 'DEMO COLLECTION' : mode === 'shared' ? 'SHARED COLLECTION' : 'YOUR COLLECTION'} <span> / </span> FOLLOW YOUR CURIOSITY</p>
-          <h1 ref={headingRef} tabIndex={-1} aria-label={root ? `Exploring ${root.label}` : undefined}>{root ? 'Where does this lead?' : 'Something here will take you somewhere.'}</h1>
-          <p>{root ? 'Choose a connected idea to go further. Open the reader for saved text and evidence.' : 'Start with an interest or a saved post. Follow a branch, then open the reader when you want the details.'}</p>
+          <h1 ref={headingRef} tabIndex={-1} aria-label={root ? `Exploring ${root.label}` : undefined}>{root ? 'Follow the connection.' : 'Explore your saves.'}</h1>
+          <p>{root ? 'Choose a connection, or open the saved post.' : 'Pick a starting point and see what connects.'}</p>
         </div>
         <button className="explore-search" type="button" onClick={onSearch}><span>⌕</span> Find a starting point <kbd>/</kbd></button>
       </header>
 
-      <nav className="explore-trail" aria-label="Exploration trail">
+      {root ? <nav className="explore-trail" aria-label="Exploration trail">
         <button type="button" onClick={() => onTravel(trail.cursor - 1)} disabled={!root || trail.cursor <= 0} aria-label="Previous exploration step">←</button>
         <button type="button" onClick={() => onTravel(trail.cursor + 1)} disabled={trail.cursor >= trail.steps.length - 1} aria-label="Next exploration step">→</button>
         <button className={!root ? 'current' : ''} type="button" onClick={onHome}>All interests</button>
@@ -215,7 +214,7 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
           ) : null)}
         </div>
         <span className="explore-visited">{[...visited].filter((id) => index.nodes.has(id)).length} explored this session</span>
-      </nav>
+      </nav> : null}
 
       <div className="explore-controls">
         <div className="explore-filters" aria-label={root ? 'Connection types' : 'Starting points'}>
@@ -228,6 +227,7 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
         {root ? <label className="explore-scout-toggle"><input type="checkbox" checked={includeScout} onChange={(event) => { setIncludeScout(event.target.checked); setPage(0); }} /> Include Scout finds</label> : <span className="explore-hint">Hover to light a path · select to follow it</span>}
       </div>
 
+      <details className="explore-navigation-options"><summary>Layout & keyboard controls</summary>
       <div className="explore-canvas-toolbar">
         <div className="explore-orientation" role="group" aria-label="Graph orientation">
           <span>LAYOUT</span>
@@ -246,6 +246,7 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
         <button className="explore-center-button" type="button" onClick={() => boardRef.current?.querySelector('[data-explore-root]')?.scrollIntoView({ block: 'nearest', inline: 'center' })}>⊙ Show focus</button>
       </div>
       <p className="explore-key-hint"><kbd>{orientation === 'LR' ? '↑' : '←'}</kbd><kbd>{orientation === 'LR' ? '↓' : '→'}</kbd> choose <span>·</span> <kbd>{orientation === 'LR' ? '→' : '↓'}</kbd> follow <span>·</span> <kbd>{orientation === 'LR' ? '←' : '↑'}</kbd> back <span>·</span> click any card to follow it</p>
+      </details>
 
       <div className="explore-map-scroll">
         <div className="explore-column-labels"><span>{root ? 'YOU ARE HERE' : 'THE STARTING POINT'}</span><span>{root ? 'CONNECTED TO THIS' : 'CHOOSE A BRANCH'}</span><span>ONE STEP FURTHER</span></div>
@@ -254,8 +255,8 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
           <article className={`explore-root ${root?.kind ?? 'collection'}`} data-explore-root>
             <div className="explore-root-star" aria-hidden="true">✧</div>
             <p className="eyebrow">{root ? kindLabel[root.kind] : 'STUFF THAT INTERESTS ME'}</p>
-            <h2>{root?.label ?? 'Your curiosity'}</h2>
-            <p className="explore-root-note">{root?.note || 'A few things caught your attention. Follow a thread and find out what they have in common.'}</p>
+            <h2>{root?.label ?? 'Your collection'}</h2>
+            <p className="explore-root-note">{root?.note || 'Every path starts with something you saved.'}</p>
             {root ? <><span className="explore-root-evidence">{root.evidence}</span><button className="explore-detail-button" type="button" onClick={onInspect}>{root.kind === 'source' ? 'Read this bookmark' : 'See the saved posts behind this'} ↗</button></> : <span className="explore-root-evidence">{index.nodes.size} things to explore</span>}
           </article>
           <div className="explore-branches">
@@ -283,8 +284,7 @@ function ExploreScene({ index, selectedId, trail, visited, mode, theme, onSelect
       {earlierConnections > 0 ? <p className="explore-return-note">{earlierConnections} {earlierConnections === 1 ? 'connection is' : 'connections are'} already on your trail. Use Back to revisit.</p> : null}
 
       <footer className="explore-next">
-        <div><span className="explore-next-mark" aria-hidden="true">✳</span><div><strong>Let a saved thought surprise you.</strong><p>Revisit something you haven’t explored in this session.</p></div><button type="button" disabled={!unseen} onClick={() => { if (unseen) explore(unseen); }}>{unseen ? unseen.kind === 'source' ? 'Rediscover a bookmark' : 'Explore another topic' : 'You’ve explored this collection'} ↗</button></div>
-        <div><span className="explore-next-mark scout" aria-hidden="true">◇</span><div><strong>Curious what’s beyond your saves?</strong><p>Scout finds are suggestions from X, labeled separately.</p></div><button type="button" onClick={onScout}>Open Scout ↗</button></div>
+        <button type="button" disabled={!unseen} onClick={() => { if (unseen) explore(unseen); }}>{unseen ? 'Surprise me with a saved thought' : 'You’ve explored this collection'} ↗</button>
       </footer>
     </section>
   );

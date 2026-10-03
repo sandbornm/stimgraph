@@ -2,6 +2,7 @@
   "name": "stimgraph",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -10,6 +11,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test lib/*.test.ts",
     "db:generate": "drizzle-kit generate"
   },

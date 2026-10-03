@@ -15,6 +15,11 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
 const localBindingConfig = {
   main: 'vinext/server/app-router-entry',
   compatibility_flags: ['nodejs_compat'],
+  // Vinext loads local configuration into the host process. Declare the names
+  // so Cloudflare passes them to the dev Worker as secrets, never client defines.
+  secrets: {
+    required: ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'X_REDIRECT_URI', ...(process.env.XAI_API_KEY ? ['XAI_API_KEY'] : [])],
+  },
   d1_databases: d1
     ? [
         {
