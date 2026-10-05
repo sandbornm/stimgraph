@@ -2,15 +2,21 @@
   "name": "stimgraph",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "vinext dev",
+    "demo": "node scripts/demo.mjs",
+    "verify": "node scripts/verify.mjs",
+    "profile:search": "node --experimental-strip-types scripts/profile-search.mjs --markdown",
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test lib/*.test.ts",
+    "test:api": "node scripts/test-api.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

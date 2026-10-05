@@ -174,6 +174,7 @@ export async function ensureSchema() {
     )`),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_imported ON bookmarks(owner_id, synced_at, created_at, post_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmark_topics_owner_topic ON bookmark_topics(owner_id, topic_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_scouts_owner_scouted ON scouts(owner_id, scouted_at)'),
@@ -321,8 +322,7 @@ export async function storeBookmarks({
         created_at = excluded.created_at,
         language = excluded.language,
         entities_json = excluded.entities_json,
-        metrics_json = excluded.metrics_json,
-        synced_at = excluded.synced_at`)
+        metrics_json = excluded.metrics_json`)
         .bind(
           owner.id,
           bookmark.postId,
@@ -499,13 +499,13 @@ export async function loadGraph(ownerId: string, scope: 'overview' | 'wide' = 'o
     d1.prepare(`SELECT post_id, author_id, author_username, author_name, text, created_at
       FROM bookmarks
       WHERE owner_id = ?
-      ORDER BY created_at DESC, synced_at DESC
+      ORDER BY synced_at DESC, created_at DESC, post_id DESC
       LIMIT ?`).bind(ownerId, limits.bookmarks),
     d1.prepare(`SELECT bt.post_id, bt.topic_id, bt.confidence
       FROM bookmark_topics bt
       JOIN bookmarks b ON b.owner_id = bt.owner_id AND b.post_id = bt.post_id
       WHERE bt.owner_id = ?
-      ORDER BY b.created_at DESC, bt.confidence DESC
+      ORDER BY b.synced_at DESC, b.created_at DESC, bt.confidence DESC
       LIMIT ?`).bind(ownerId, limits.bookmarkTopics),
     d1.prepare(`SELECT
         first.topic_id AS first_topic_id,

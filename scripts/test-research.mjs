@@ -31,6 +31,9 @@ try {
     sources: [{ id: ids[0], label: 'Client label ignored', role: 'method', quote: 'A small proof checks each transformation.', reason: 'Method', intent: 'method' },
       { id: ids[1], label: 'Client label ignored', role: 'problem', quote: 'Memory limits make validation costly.', reason: 'Problem', intent: 'disagree' }] };
   assert.equal((await request('/api/research')).status, 401);
+  assert.equal((await request('/api/data', undefined, { method: 'DELETE' })).status, 401);
+  assert.equal((await request('/api/data', cookieA, { method: 'DELETE', headers: { Origin: 'https://example.invalid' } })).status, 403);
+  assert.equal((await request('/api/data', cookieA, { method: 'DELETE', headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
   assert.equal((await post(undefined, { action: 'save', card })).status, 401);
   assert.equal((await post(cookieA, { action: 'save', card }, { Origin: 'https://example.invalid' })).status, 403);
   assert.equal((await post(cookieA, { action: 'generate', sourceIds: ids, lens: 'method_transfer', reach: 'close' })).status, 400);
@@ -61,9 +64,21 @@ try {
   await fixture(cookieA, 'fill-cards');
   const cap = await Promise.all([post(cookieA, { action: 'save', card }), post(cookieA, { action: 'save', card })]);
   assert.deepEqual(cap.map((response) => response.status).sort(), [201, 409]);
-  assert.match(await (await request('/')).text(), /Research bench/);
-  assert.equal((await request('/api/data', cookieA, { method: 'DELETE' })).status, 200);
+  const page = await request('/');
+  assert.equal(page.status, 200);
+  assert.ok((await page.text()).includes('aria-label="Bookmark library"'), 'The initial page should render the bookmark library; research tools open on demand.');
+  const foreignSave = await post(cookieB, { action: 'save', card: { ...card, sources: card.sources.map((source, index) => ({ ...source, id: foreignIds[index] })) } });
+  assert.equal(foreignSave.status, 201);
+  const { card: foreignCard } = await foreignSave.json();
+  const sessionStatus = await request('/api/auth/x/status', cookieA);
+  const storedCookie = sessionStatus.headers.get('set-cookie').split(';')[0];
+  const deleted = await request(`/api/data?ownerId=${encodeURIComponent(ownerB)}`, storedCookie, { method: 'DELETE' });
+  assert.equal(deleted.status, 200);
+  assert.match(deleted.headers.get('cache-control'), /private, no-store/);
+  assert.match(deleted.headers.get('set-cookie'), /stim_x_session=;.*Max-Age=0/i);
+  assert.equal((await (await request('/api/auth/x/status', storedCookie)).json()).connected, false, 'Deletion must invalidate the stored session.');
   assert.deepEqual(await (await fixture(cookieA, 'counts')).json(), { cards: 0, requests: 0 });
+  assert.deepEqual((await (await request('/api/research', cookieB)).json()).cards.map((saved) => saved.id), [foreignCard.id], 'Deleting one owner must preserve another owner’s cards.');
   console.log('Research API passed: source ownership, quotation checks, persistence, versions, isolation, quotas, record cap, deletion, and page rendering. No live provider calls.');
 } finally {
   await request('/api/data', cookieA, { method: 'DELETE' });

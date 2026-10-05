@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
 
 # Dependencies and generated output
 node_modules/
@@ -11,7 +13,7 @@ dist/
 .open-next/
 
 # Local data
-data/
+/data/
 *.db
 *.db-shm
 *.db-wal
@@ -21,4 +23,3 @@ data/
 .DS_Store
 tsconfig.tsbuildinfo
 .wrangler/
-

@@ -9,7 +9,7 @@ import { getActiveXSession } from '@/lib/x-auth-server';
 
 export async function POST(request: NextRequest) {
   if (request.nextUrl.hostname !== '127.0.0.1' || request.nextUrl.port !== '3012'
-    || getRuntimeValue('X_CLIENT_ID') !== 'stimgraph-research-test'
+    || getRuntimeValue('X_CLIENT_ID') !== 'stimgraph-inert-test'
     || getRuntimeValue('X_CLIENT_SECRET') !== 'stimgraph-inert-test-secret'
     || getRuntimeValue('XAI_API_KEY')) return new NextResponse(null, { status: 404 });
   const active = await getActiveXSession(request);

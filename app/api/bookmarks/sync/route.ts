@@ -14,6 +14,8 @@ type SyncEvent = {
   insertedIds?: string[];
   page?: number;
   hasMore?: boolean;
+  nextToken?: string;
+  startedAt?: number;
   live?: boolean;
   limit?: number;
   authors?: string[];
@@ -44,11 +46,15 @@ export async function POST(request: NextRequest) {
   let requestedLimit = 600;
   let live = false;
   let stream = false;
+  let paginationToken: string | undefined;
+  let includeFollowing = false;
   try {
-    const body = (await request.json()) as { limit?: number; live?: boolean; stream?: boolean };
-    if (typeof body.limit === 'number') requestedLimit = body.limit;
+    const body = (await request.json()) as { limit?: number; live?: boolean; stream?: boolean; paginationToken?: string; includeFollowing?: boolean };
+    if (typeof body.limit === 'number' && Number.isFinite(body.limit)) requestedLimit = body.limit;
     live = body.live === true;
     stream = body.stream === true;
+    includeFollowing = body.includeFollowing === true;
+    if (typeof body.paginationToken === 'string' && body.paginationToken.length > 0 && body.paginationToken.length <= 4096) paginationToken = body.paginationToken;
   } catch {
     // The default limit is intentionally conservative.
   }
@@ -60,6 +66,8 @@ export async function POST(request: NextRequest) {
         accessToken: active.session.accessToken,
         userId: active.session.profile.id,
         limit,
+        paginationToken: live ? undefined : paginationToken,
+        signal: request.signal,
       });
       const stored = await storeBookmarks({
         owner: active.session.profile,
@@ -70,14 +78,15 @@ export async function POST(request: NextRequest) {
         imported: stored.stored,
         inserted: stored.inserted,
         insertedIds: stored.insertedIds,
-        hasMore: live ? false : result.hasMore,
+        hasMore: result.hasMore,
+        nextToken: live ? undefined : result.nextToken,
         live,
         limit,
-      });
+      }, { headers: { 'Cache-Control': 'private, no-store' } });
       return withRenewedSession(response, request, active.renewedCookie);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
-      return NextResponse.json({ error: message }, { status: 502 });
+      return withRenewedSession(NextResponse.json({ error: message }, { status: 502 }), request, active.renewedCookie);
     }
   }
 
@@ -85,16 +94,23 @@ export async function POST(request: NextRequest) {
   let imported = 0;
   let inserted = 0;
   const allInsertedIds: string[] = [];
+  let nextToken = paginationToken;
+  let hasMore = false;
+  let cancelled = false;
+  const startedAt = Date.now();
+  const abort = new AbortController();
   const readable = new ReadableStream({
     async start(controller) {
       const send = (event: SyncEvent) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        if (!cancelled) controller.enqueue(encoder.encode(`${JSON.stringify({ startedAt, ...event })}\n`));
       };
       try {
         for await (const page of iterateXBookmarks({
           accessToken: active.session.accessToken,
           userId: active.session.profile.id,
           limit,
+          paginationToken,
+          signal: AbortSignal.any([request.signal, abort.signal]),
         })) {
           const stored = await storeBookmarks({
             owner: active.session.profile,
@@ -104,6 +120,8 @@ export async function POST(request: NextRequest) {
           imported += stored.stored;
           inserted += stored.inserted;
           allInsertedIds.push(...stored.insertedIds);
+          nextToken = page.nextToken;
+          hasMore = page.hasMore;
           send({
             type: 'page',
             imported,
@@ -111,12 +129,15 @@ export async function POST(request: NextRequest) {
             insertedIds: stored.insertedIds,
             page: page.page,
             hasMore: page.hasMore,
+            nextToken,
             limit,
             authors: [...new Set(page.bookmarks.map((bookmark) => bookmark.authorUsername))].slice(0, 4),
           });
         }
-        const follows = await importFollowing(active.session.accessToken, active.session.profile.id);
-        send({
+        const follows: { following?: number; followingError?: string } = includeFollowing && !cancelled
+          ? await importFollowing(active.session.accessToken, active.session.profile.id)
+          : {};
+        if (includeFollowing) send({
           type: 'following',
           following: follows.following,
           followingError: follows.followingError,
@@ -130,17 +151,22 @@ export async function POST(request: NextRequest) {
           imported,
           inserted,
           insertedIds: allInsertedIds,
-          hasMore: false,
+          hasMore,
+          nextToken,
           limit,
           following: follows.following,
           followingError: follows.followingError,
         });
-        controller.close();
+        if (!cancelled) controller.close();
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
-        send({ type: 'error', error: message, imported, inserted, insertedIds: allInsertedIds, limit });
-        controller.close();
+        send({ type: 'error', error: message, imported, inserted, insertedIds: allInsertedIds, limit, hasMore: Boolean(nextToken), nextToken });
+        if (!cancelled) controller.close();
       }
+    },
+    cancel() {
+      cancelled = true;
+      abort.abort();
     },
   });
 

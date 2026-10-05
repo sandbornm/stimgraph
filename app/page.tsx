@@ -14,6 +14,9 @@ import {
 } from '@/lib/graph-model';
 import { readNdjson } from '@/lib/read-ndjson';
 import { ExploreGraph } from './explore-graph';
+import { BookmarkLibrary } from './bookmark-library';
+import { ToolsMenu } from './tools-menu';
+import type { LibraryBookmark } from '@/lib/bookmark-library';
 import { TrajectoryWorkbench } from './trajectory-workbench';
 import { buildExploreIndex, connectionReason, exploreConnections, pruneExploreTrail, visitExploreTrail, type ExploreOrientation, type ExploreTrail } from '@/lib/explore-model';
 import type { FeedProbe } from '@/lib/rss-probe';
@@ -120,6 +123,10 @@ function darkenHex(hex: string, amount: number) {
 function paletteLabel(palette: GraphTuning['palette']) {
   if (palette === 'phosphor') return 'void';
   return palette;
+}
+
+function isEditingTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
 }
 
 function tunedNodeColor(node: StimNode, palette: GraphTuning['palette'], theme: ThemeName = 'dark') {
@@ -1429,6 +1436,7 @@ function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, time
 type ConnectionState = {
   connected: boolean;
   configured?: boolean;
+  missingConfiguration?: string[];
   profile?: { id: string; username: string; name: string; profileImageUrl?: string };
 };
 
@@ -1467,6 +1475,8 @@ type SyncStreamEvent = {
   insertedIds?: string[];
   page?: number;
   hasMore?: boolean;
+  nextToken?: string;
+  startedAt?: number;
   limit?: number;
   authors?: string[];
   following?: number;
@@ -1496,9 +1506,16 @@ export default function Home() {
   const [shareUrl, setShareUrl] = useState('');
   const [incomingShare, setIncomingShare] = useState<GraphCapsule | null>(null);
   const [sharePath, setSharePath] = useState('');
-  const [view, setView] = useState<ViewMode>('explore');
+  const [view, setView] = useState<ViewMode>('bookmarks');
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [researchToolsOpen, setResearchToolsOpen] = useState(false);
+  const [researchToolsMounted, setResearchToolsMounted] = useState(false);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [syncMessage, setSyncMessage] = useState('');
+  const [syncCursor, setSyncCursor] = useState<string | undefined>();
+  const [libraryRevision, setLibraryRevision] = useState(0);
+  const [libraryNewSince, setLibraryNewSince] = useState(0);
+  const [libraryNewOnly, setLibraryNewOnly] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [liveInserted, setLiveInserted] = useState(0);
   const [liveWatch, setLiveWatch] = useState(false);
@@ -1547,7 +1564,17 @@ export default function Home() {
   const topicCount = graphNodes.filter((node) => node.kind === 'topic').length;
   const peopleCount = graphNodes.filter((node) => node.kind === 'person' && !isSelf(node)).length;
   const sourceCount = graphNodes.filter((node) => node.kind === 'source').length;
-  const scoutCount = graphNodes.filter((node) => node.kind === 'scout').length;
+  const demoLibrary = useMemo<LibraryBookmark[]>(() => mode === 'live' ? [] : graphNodes.filter((node) => node.kind === 'source').map((node) => {
+    const connected = graphEdges.filter((edge) => edge.kind === 'evidence' && (edge.from === node.id || edge.to === node.id))
+      .map((edge) => graphNodes.find((candidate) => candidate.id === (edge.from === node.id ? edge.to : edge.from))).filter(Boolean) as StimNode[];
+    const author = connected.find((candidate) => candidate.kind === 'person');
+    return {
+      postId: node.id.slice('bookmark:'.length), authorId: author?.id.slice('person:'.length) ?? 'unknown',
+      authorUsername: author?.label.split('@')[1] ?? 'demo', authorName: author?.label.split(' · ')[0] ?? 'Demo author',
+      text: node.note, createdAt: null, importedAt: 0,
+      topics: connected.filter((candidate) => candidate.kind === 'topic').map((topic) => ({ id: topic.id.slice('topic:'.length), label: topic.label, confidence: 100 })),
+    };
+  }), [graphNodes, graphEdges, mode]);
   const liveState: 'off' | 'watching' | 'pulling' = mode === 'live' && connection.connected && liveWatch
     ? (pulling ? 'pulling' : 'watching')
     : 'off';
@@ -1628,7 +1655,7 @@ export default function Home() {
   const relatedIdeas = selectedConnections.filter(({ neighbor }) => neighbor.kind !== 'source').slice(0, 5);
   const previousConnection = selectedConnections.find(({ neighbor }) => neighbor.id === activeExploreTrail.steps[activeExploreTrail.cursor - 1]);
   const globeBusy = activity?.kind === 'sync' || activity?.kind === 'scout' || activity?.kind === 'enrich' || activity?.kind === 'rss';
-  const showInspector = view === 'explore'
+  const showInspector = view === 'bookmarks' ? permissionsOpen : view === 'explore'
     ? permissionsOpen || (Boolean(selected) && exploreDetailsOpen)
     : Boolean(selected) || view !== 'map' || permissionsOpen;
   useEffect(() => {
@@ -1749,6 +1776,36 @@ export default function Home() {
       setGuideIndex(-1);
     }
   }, [focusNode]);
+
+  const exploreBookmark = (item: LibraryBookmark) => {
+    const sourceId = `bookmark:${item.postId}`;
+    const authorId = `person:${item.authorId}`;
+    const source: StimNode = withSearchLabel({
+      id: sourceId, label: item.text.replace(/\s+/g, ' ').slice(0, 58), kind: 'source',
+      x: .5, y: .5, size: 4, color: '#6a6a66', note: item.text,
+      evidence: `Saved from @${item.authorUsername}`,
+      url: `https://x.com/${encodeURIComponent(item.authorUsername)}/status/${encodeURIComponent(item.postId)}`,
+    });
+    const additions: StimNode[] = [source, withSearchLabel({
+      id: authorId, label: `${item.authorName} · @${item.authorUsername}`, kind: 'person',
+      x: .35, y: .5, size: 6, color: '#f2f2f0', note: `Author of this saved post.`, evidence: 'From your library',
+    }), ...item.topics.map((topic) => withSearchLabel({
+      id: `topic:${topic.id}`, label: topic.label, kind: 'topic' as const,
+      x: .4 + stableFraction(topic.id) * .3, y: .3, size: 9, color: '#a7d5c5',
+      note: 'A topic assigned to this saved post.', evidence: 'From your library',
+    }))];
+    setGraphNodes((current) => [...current, ...additions.filter((node) => !current.some((existing) => existing.id === node.id))]);
+    const edges: Edge[] = [{ from: sourceId, to: authorId, weight: .38, kind: 'evidence' },
+      ...item.topics.map((topic) => ({ from: sourceId, to: `topic:${topic.id}`, weight: Math.min(.82, .28 + topic.confidence / 180), kind: 'evidence' as const }))];
+    setGraphEdges((current) => [...current, ...edges.filter((edge) => !current.some((existing) => existing.from === edge.from && existing.to === edge.to))]);
+    setView('explore');
+    setSelectedId(sourceId);
+    setExploreTrail({ steps: [sourceId], cursor: 0 });
+    setExploreVisited((current) => new Set([...current, sourceId]));
+    setExploreDetailsOpen(false);
+    setPermissionsOpen(false);
+    setGuideIndex(-1);
+  };
 
   const runGuide = useCallback((delta: 1 | -1) => {
     if (guideStops.length === 0) return;
@@ -1898,7 +1955,7 @@ export default function Home() {
         : auth === 'failed'
           ? 'X sign-in could not be completed. Check that the configured callback address matches this app.'
           : 'X connected. Sync your bookmarks to start exploring.');
-      setPermissionsOpen(true);
+      setPermissionsOpen(auth !== 'connected');
       url.searchParams.delete('auth');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     });
@@ -2042,6 +2099,7 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (toolsOpen) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setPaletteIndex(0);
@@ -2049,7 +2107,7 @@ export default function Home() {
         setHelpOpen(false);
         return;
       }
-      if (event.key === '/' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
+      if (event.key === '/' && !isEditingTarget(event.target) && !event.metaKey && !event.ctrlKey && !event.altKey) {
         event.preventDefault();
         setPaletteIndex(0);
         setPaletteOpen(true);
@@ -2081,16 +2139,16 @@ export default function Home() {
         }
         searchRef.current?.blur();
       }
-      if (event.key.toLowerCase() === 't' && !(event.target instanceof HTMLInputElement) && !paletteOpen) {
+      if (event.key.toLowerCase() === 't' && !isEditingTarget(event.target) && !paletteOpen && !event.metaKey && !event.ctrlKey && !event.altKey) {
         setTuningOpen((open) => !open);
       }
-      if (event.key.toLowerCase() === 'l' && !(event.target instanceof HTMLInputElement) && !paletteOpen) {
+      if (event.key.toLowerCase() === 'l' && !isEditingTarget(event.target) && !paletteOpen && !event.metaKey && !event.ctrlKey && !event.altKey) {
         setTraceOpen((open) => !open);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [exploreDetailsOpen, helpOpen, paletteOpen, permissionsOpen, selectedId]);
+  }, [exploreDetailsOpen, helpOpen, paletteOpen, permissionsOpen, selectedId, toolsOpen]);
 
   useLayoutEffect(() => {
     const savedTuning = readStoredTuning();
@@ -2172,6 +2230,7 @@ export default function Home() {
           emptyStreak = 0;
           setLiveInserted((count) => count + (result.inserted ?? 0));
           await loadLiveGraph({ keepView: true });
+          setLibraryRevision((value) => value + 1);
           markFresh((result.insertedIds ?? []).map((id) => `bookmark:${id}`));
           setActivity({ kind: 'live', label: `${result.inserted} new saves`, detail: 'New saves on the map' });
         } else {
@@ -2221,7 +2280,10 @@ export default function Home() {
     return () => window.clearInterval(interval);
   }, [connection.connected, keepScouting, mode, runScout]);
 
-  const syncBookmarks = async () => {
+  const syncBookmarks = async (continueImport = false, includeFollowing = false) => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    if (!continueImport) setSyncCursor(undefined);
     setSyncState('syncing');
     setSyncMessage('Opening bookmarks…');
     setActivity({ kind: 'sync', label: 'Syncing bookmarks', current: 0, total: 600, detail: 'Waiting on X' });
@@ -2229,7 +2291,7 @@ export default function Home() {
       const response = await fetch('/api/bookmarks/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit: 600, stream: true }),
+        body: JSON.stringify({ limit: 600, stream: true, paginationToken: continueImport ? syncCursor : undefined, includeFollowing }),
       });
       if (!response.ok) {
         const failed = (await response.json()) as { error?: string };
@@ -2239,10 +2301,18 @@ export default function Home() {
       let inserted = 0;
       let following = 0;
       let followingError = '';
+      let completed = false;
+      let more = false;
       await readNdjson<SyncStreamEvent>(response, async (event) => {
-        if (event.type === 'error') throw new Error(event.error ?? 'Sync failed.');
         imported = event.imported ?? imported;
         inserted = event.inserted ?? inserted;
+        if (event.startedAt) setLibraryNewSince((current) => current || event.startedAt!);
+        if (event.type === 'page' || event.type === 'done' || event.type === 'error') {
+          setSyncCursor(event.nextToken);
+          more = Boolean(event.hasMore);
+        }
+        if (event.type === 'error') throw new Error(`${event.error ?? 'Sync failed.'}${imported ? ` ${imported} bookmarks checked; ${inserted} new bookmarks saved.` : ''}`);
+        if (event.type === 'done') completed = true;
         if (event.following != null) following = event.following;
         if (event.followingError) followingError = event.followingError;
         const authors = (event.authors ?? []).map((handle) => `@${handle}`).join('  ');
@@ -2277,25 +2347,33 @@ export default function Home() {
         if (remap) {
           setActivity((current) => current ? { ...current, detail: 'Building the map' } : current);
           await loadLiveGraph({ keepView: true });
+          setLibraryRevision((value) => value + 1);
         }
       });
+      if (!completed) throw new Error('The connection ended before sync finished. Imported pages are saved. Continue the import or retry Sync.');
       setSyncState('done');
+      setPermissionsOpen(false);
       setLiveInserted((count) => count + inserted);
-      setSyncMessage(followingError
-        ? `${imported} bookmarks mapped · ${inserted} new. ${followingError}`
-        : `${imported} bookmarks mapped · ${inserted} new · ${following} following.`);
+      const message = followingError
+        ? `${inserted} new · ${imported} checked. ${followingError}`
+        : `${inserted} new bookmarks · ${imported} checked${includeFollowing ? ` · ${following} following` : ''}. ${more ? 'More bookmarks are available.' : 'X returned no more pages.'}`;
+      setSyncMessage(message);
+      if (!more && !followingError) window.setTimeout(() => setSyncMessage((current) => current === message ? '' : current), 10_000);
       setActivity({
         kind: 'sync',
         label: 'Map updated',
         current: imported,
         total: imported || 600,
-        detail: followingError ? followingError : `${inserted} new saves · ${following} following`,
+        detail: followingError || `${inserted} new saves${more ? ' · more available' : ''}`,
       });
       window.setTimeout(() => setActivity((current) => current?.kind === 'sync' ? null : current), 1800);
     } catch (error) {
       setSyncState('error');
       setSyncMessage(error instanceof Error ? error.message : 'Sync failed.');
       setActivity(null);
+      setLibraryRevision((value) => value + 1);
+    } finally {
+      syncingRef.current = false;
     }
   };
 
@@ -2337,6 +2415,8 @@ export default function Home() {
   };
 
   const enterView = useCallback((nextView: ViewMode) => {
+    setToolsOpen(false);
+    setResearchToolsOpen(false);
     setTuningOpen(false);
     setPermissionsOpen(false);
     setView(nextView);
@@ -2415,8 +2495,7 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      if (typing || paletteOpen) return;
+      if (isEditingTarget(event.target) || paletteOpen || toolsOpen || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === '?' ) {
         event.preventDefault();
         setHelpOpen((open) => !open);
@@ -2446,7 +2525,7 @@ export default function Home() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [enterView, paletteOpen, rediscover, runGuide, seedNeighborhood]);
+  }, [enterView, paletteOpen, toolsOpen, rediscover, runGuide, seedNeighborhood]);
 
   const applyPaletteHit = (hit: PaletteHit) => {
     setPaletteOpen(false);
@@ -2637,6 +2716,9 @@ export default function Home() {
     });
     setMode('demo');
     setPulling(false);
+    setSyncCursor(undefined);
+    setLibraryNewSince(0);
+    setLibraryNewOnly(false);
     setKeepScouting(false);
     setActivity(null);
     setFreshIds(new Set());
@@ -2677,7 +2759,7 @@ export default function Home() {
       const status = await response.json() as ConnectionState;
       setConnection(status);
       if (status.configured === false) {
-        throw new Error('X sign-in is not set up for this copy of Stimgraph. You can explore the demo here. To use your bookmarks, open the app where you configured X.');
+        throw new Error(`X login needs server configuration${status.missingConfiguration?.length ? `: ${status.missingConfiguration.join(', ')}` : ''}. Restore your existing X app settings in .env.local, restart the server, then connect again.`);
       }
       window.location.assign(sharePath ? `/api/auth/x/start?return=${encodeURIComponent(sharePath)}` : '/api/auth/x/start');
     } catch (error) {
@@ -2702,9 +2784,15 @@ export default function Home() {
           </div>
         </div>
 
-        <button className="search-box" type="button" onClick={() => { setPaletteIndex(0); setPaletteOpen(true); setHelpOpen(false); }} aria-label="Search topics, people, and posts">
+        <nav className="primary-nav" aria-label="Main navigation">
+          <button type="button" aria-current={view === 'bookmarks' ? 'page' : undefined} onClick={() => enterView('bookmarks')}>Bookmarks</button>
+          <button type="button" aria-current={view === 'explore' ? 'page' : undefined} onClick={() => enterView('explore')}>Explore</button>
+          <button type="button" aria-haspopup="dialog" aria-expanded={toolsOpen} onClick={() => setToolsOpen(true)}>Tools <span aria-hidden="true">⌄</span></button>
+        </nav>
+
+        <button className={`search-box ${view === 'bookmarks' ? 'library-search-hidden' : ''}`} type="button" onClick={() => { setPaletteIndex(0); setPaletteOpen(true); setHelpOpen(false); }} aria-label="Search topics, people, and posts">
           <span aria-hidden="true">⌕</span>
-          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Search · @ # ~ :'}</span>
+          <span className={query ? 'search-value' : 'search-placeholder'}>{query || 'Find on the map…'}</span>
           <kbd>⌘K</kbd>
         </button>
 
@@ -2714,19 +2802,11 @@ export default function Home() {
               ? `${totals.bookmark_count} saved${liveInserted ? ` · +${liveInserted}` : ''}`
               : mode === 'shared' ? (shareName ?? 'Shared') : 'Demo'}
           </span>
-          <button
-            className="theme-toggle"
-            type="button"
-            onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {theme === 'dark' ? 'Light' : 'Dark'}
-          </button>
           {connection.connected ? (
-            <button className="connect-button sync-button" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
+            <button className="connect-button sync-button" type="button" onClick={() => void syncBookmarks(Boolean(syncCursor))} disabled={syncState === 'syncing'}>
               {syncState === 'syncing'
                 ? (activity?.kind === 'sync' && activity.current != null ? `${activity.current}/${activity.total}` : 'Syncing…')
-                : `Sync @${connection.profile?.username ?? 'X'}`}
+                : syncCursor ? 'Continue import' : `Sync @${connection.profile?.username ?? 'X'}`}
             </button>
           ) : (
             <button className="connect-button sync-button" type="button" onClick={() => void connectX()} disabled={connecting}>{connecting ? 'Checking X…' : 'Connect X'}</button>
@@ -2734,47 +2814,23 @@ export default function Home() {
         </div>
       </header>
 
+      {syncMessage ? <div className={`sync-notice ${syncState}`}>
+        <p role="status">{syncMessage}</p>
+        <div>
+          {syncState !== 'syncing' && mode === 'live' ? <button type="button" onClick={() => { enterView('bookmarks'); setLibraryNewOnly(true); }}>Review new bookmarks</button> : null}
+          {syncCursor && syncState !== 'syncing' ? <button type="button" onClick={() => void syncBookmarks(true)}>Continue import</button> : null}
+          {syncState === 'error' && !syncCursor && connection.connected ? <button type="button" onClick={() => void syncBookmarks()}>Retry sync</button> : null}
+          {syncState !== 'syncing' ? <button type="button" onClick={() => setSyncMessage('')} aria-label="Dismiss sync status">×</button> : null}
+        </div>
+      </div> : null}
       <section className="workspace">
-        <aside className="left-rail" aria-label="Graph navigation">
-          <nav>
-            <button className={`rail-item ${view === 'explore' ? 'active' : ''}`} type="button" onClick={() => enterView('explore')}><span>✧</span>Explore</button>
-            <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>◎</span>Globe</button>
-            <button className={`rail-item ${view === 'people' ? 'active' : ''}`} type="button" onClick={() => enterView('people')}><span>◎</span>People</button>
-            <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Topics</button>
-            <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Bookmarks</button>
-            <button className={`rail-item ${view === 'scout' ? 'active' : ''}`} type="button" onClick={() => enterView('scout')}><span>⬡</span>Scout</button>
-            <button className={`rail-item ${view === 'feeds' ? 'active' : ''}`} type="button" onClick={() => enterView('feeds')}><span>⇉</span>Feeds</button>
-            <button className={`rail-item ${view === 'neighborhood' ? 'active' : ''}`} type="button" onClick={seedNeighborhood}><span>⊙</span>Neighborhood</button>
-            <button className={`rail-item ${view === 'blend' ? 'active' : ''}`} type="button" onClick={() => seedGraph ? enterView('blend') : loadDemoCombination()}><span>⌁</span>Combine</button>
-            <button className={`rail-item ${tuningOpen ? 'active' : ''}`} type="button" onClick={() => { setTuningOpen((open) => !open); flyTo(graphNodes.map((node) => node.id)); }}><span>◌</span>Tune</button>
-            <button className={`rail-item ${guideIndex >= 0 ? 'active' : ''}`} type="button" onClick={() => runGuide(1)}><span>◐</span>Guide</button>
-            <button className="rail-item" type="button" onClick={() => { setGuideIndex(-1); rediscover(); }}><span>◷</span>Rediscover</button>
-          </nav>
-
-          <div className="rail-summary">
-            <p className="eyebrow">{fieldScope === 'wide' ? 'WIDE MAP' : 'ON THE MAP'}</p>
-            <dl>
-              <div><dt>Topics</dt><dd>{topicCount}</dd></div>
-              <div><dt>People</dt><dd>{peopleCount}</dd></div>
-              <div><dt>Following</dt><dd>{totals.following_count ?? graphNodes.filter((node) => node.followed).length}</dd></div>
-              <div><dt>Bookmarks</dt><dd>{sourceCount}</dd></div>
-              <div><dt>Scouted</dt><dd>{scoutCount}</dd></div>
-            </dl>
-          </div>
-
-          <button className={`permissions-link ${permissionsOpen && !selectedId && view === 'map' ? 'active' : ''}`} type="button" onClick={() => { setSelectedId(null); setPermissionsOpen((open) => !open); }}>
-            <span>◇</span>
-            <span><b>Read-only</b><small>Permissions and sharing</small></span>
-          </button>
-        </aside>
-
-        <div className={`graph-stage palette-${tuning.palette} ${view === 'explore' ? 'explore-stage' : ''}`}>
-          <div className={`stage-heading ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides || view === 'explore'}>
+        <div className={`graph-stage palette-${tuning.palette} ${view === 'explore' ? 'explore-stage' : ''} ${view === 'bookmarks' ? 'library-stage' : ''}`}>
+          <div className={`stage-heading ${tuning.guides && view !== 'explore' && view !== 'bookmarks' ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides || view === 'explore' || view === 'bookmarks'}>
             <p className="eyebrow">{stageCopy.eyebrow}</p>
             <h1>{stageCopy.title}</h1>
             <p>{stageCopy.detail}</p>
           </div>
-          <div className={`field-readout ${activity ? 'busy' : ''} ${view === 'explore' && !activity ? 'guide-hidden' : ''}`} aria-live="polite">
+          <div className={`field-readout ${activity ? 'busy' : ''} ${(view === 'explore' && !activity) || view === 'bookmarks' ? 'guide-hidden' : ''}`} aria-live="polite">
             {activity ? (
               <>
                 <span>{activity.label}{activity.current != null ? `  ${activity.current}/${activity.total}` : ''}</span>
@@ -2794,10 +2850,10 @@ export default function Home() {
               : undefined}
             />
           </div>
-          <TrajectoryWorkbench
+          {researchToolsMounted ? <TrajectoryWorkbench
             key={`${mode}:${connection.profile?.id ?? shareName ?? 'demo'}`}
             nodes={graphNodes} edges={graphEdges} trail={activeExploreTrail} visited={exploreVisited}
-            mode={mode} hidden={view !== 'explore'}
+            mode={mode} hidden={view !== 'explore' || !researchToolsOpen} onClose={() => setResearchToolsOpen(false)}
             onResume={(next) => {
               setExploreTrail(next);
               setSelectedId(next.steps[next.cursor] ?? null);
@@ -2806,11 +2862,17 @@ export default function Home() {
               setPermissionsOpen(false);
               setGuideIndex(-1);
             }}
+          /> : null}
+          <BookmarkLibrary
+            key={`library:${mode}:${connection.profile?.id ?? 'demo'}`}
+            mode={mode} demoItems={demoLibrary} revision={libraryRevision}
+            newSince={libraryNewSince} newOnly={libraryNewOnly} onNewOnlyChange={setLibraryNewOnly}
+            onExplore={exploreBookmark} hidden={view !== 'bookmarks'}
           />
-          {view === 'explore' ? <ExploreGraph
+          {view === 'bookmarks' ? null : view === 'explore' ? <ExploreGraph
             orientation={exploreOrientation} onOrientationChange={setExploreOrientation}
             nodes={graphNodes} edges={graphEdges} selectedId={selectedId} trail={activeExploreTrail} visited={exploreVisited} mode={mode} theme={theme}
-            shortcutsBlocked={paletteOpen || helpOpen || tuningOpen || showInspector}
+            shortcutsBlocked={paletteOpen || helpOpen || tuningOpen || toolsOpen || showInspector}
             onSelect={(id, via) => focusNode(id, { via })}
             onTravel={(cursor) => {
               const id = activeExploreTrail.steps[cursor];
@@ -2822,9 +2884,8 @@ export default function Home() {
             onHome={() => enterView('explore')}
             onInspect={() => setExploreDetailsOpen(true)}
             onSearch={() => { setPaletteIndex(0); setPaletteOpen(true); }}
-            onScout={() => enterView('scout')}
           /> : <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} searchNeedleRef={searchNeedleRef} tuning={viewTuning} freshIds={freshIds} busy={globeBusy} frameToken={frameToken} frameIds={frameIds} onSelect={handleSelect} />}
-          <div className={`legend ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides || view === 'explore'}>
+          <div className={`legend ${tuning.guides && view !== 'explore' && view !== 'bookmarks' ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides || view === 'explore' || view === 'bookmarks'}>
             {view === 'blend' && seedGraph ? (
               <>
                 <span><i className="local-dot" />Yours</span>
@@ -2906,6 +2967,7 @@ export default function Home() {
 
           {showInspector ? (
           <aside className={`inspector ${selected || view !== 'map' ? 'has-selection' : ''} ${selected ? 'reader-panel' : ''}`} aria-label={selected ? 'Bookmark reader and connections' : 'Map details and settings'}>
+          {!selected && permissionsOpen ? <div className="inspector-topline settings-topline"><p className="eyebrow">X & COLLECTION</p><button type="button" onClick={() => setPermissionsOpen(false)} aria-label="Close settings">×</button></div> : null}
           {selected ? (
             <>
               <div className="inspector-topline">
@@ -2952,7 +3014,7 @@ export default function Home() {
               {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
               {shareUrl ? <a className="node-link" href={shareUrl}>{shareUrl.replace(/^https?:\/\//, '')}</a> : null}
             </>
-          ) : view !== 'map' && view !== 'explore' ? (
+          ) : view !== 'map' && view !== 'explore' && !permissionsOpen ? (
             <div className="view-panel">
               <p className="eyebrow">{view === 'people' ? 'PEOPLE' : view === 'threads' ? 'TOPICS' : view === 'bookmarks' ? 'BOOKMARKS' : view === 'scout' ? 'GROK SCOUT' : view === 'neighborhood' ? 'NEIGHBORHOOD' : view === 'feeds' ? 'RSS' : 'COMBINED MAP'}</p>
               <h2>{view === 'people' ? 'Authors and accounts you follow.' : view === 'threads' ? 'Topics.' : view === 'bookmarks' ? 'Saved posts.' : view === 'scout' ? 'Suggested posts.' : view === 'neighborhood' ? 'This neighborhood.' : view === 'feeds' ? 'Linked sites and feeds.' : seedGraph ? `Yours and ${seedGraph.name}` : 'Combine two graphs.'}</h2>
@@ -3026,10 +3088,10 @@ export default function Home() {
               <p>{mode === 'shared'
                 ? 'People and topics only. Bookmark text is not in this link. Combine with the demo, or connect X and it will lay onto your map when you come back.'
                 : connection.connected
-                ? 'Sync pulls bookmarks and who you follow. Live watch of new saves is optional and off by default.'
+                ? 'Sync checks your bookmarks. You can also refresh following or enable live watch here.'
                 : 'Read-only: bookmarks, following, posts, profiles. It cannot post, like, follow, or change bookmarks.'}</p>
               {connection.connected ? (
-                <button className="wide-connect" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
+                <button className="wide-connect" type="button" onClick={() => void syncBookmarks(false, true)} disabled={syncState === 'syncing'}>
                   {syncState === 'syncing'
                     ? (activity?.kind === 'sync' && activity.current != null
                       ? `Mapping ${activity.current} of ${activity.total}…`
@@ -3128,6 +3190,33 @@ export default function Home() {
           ) : null}
         </div>
       </section>
+      <ToolsMenu open={toolsOpen} onClose={() => setToolsOpen(false)} summary={`${totals.bookmark_count} saved · ${sourceCount} bookmarks, ${topicCount} topics and ${peopleCount} people on the map · ${liveState === 'off' ? 'Live watch off' : 'Live watch on'} · ~${xReads} X reads this session`} groups={[
+        { label: 'Explore more', items: [
+          { label: 'Globe', detail: 'See the whole map in motion', run: () => enterView('map') },
+          { label: 'People', detail: 'Authors and accounts you follow', run: () => enterView('people') },
+          { label: 'Topics', detail: 'Browse and name the ideas in your saves', run: () => enterView('threads') },
+          { label: 'Rediscover', detail: 'Pick up a thought you haven’t explored', run: () => {
+            const next = graphNodes.find((node) => node.kind === 'source' && !exploreVisited.has(node.id)) ?? graphNodes.find((node) => node.kind === 'source');
+            setView('explore');
+            if (next) focusNode(next.id);
+          } },
+        ] },
+        { label: 'Research & discovery', items: [
+          { label: 'Organize with Grok', detail: 'Add topics to your saved posts, one batch at a time', run: () => enterView('threads') },
+          { label: 'Research workspace', detail: 'Bridges, research cards and saved paths', run: () => { enterView('explore'); setResearchToolsMounted(true); setResearchToolsOpen(true); } },
+          { label: 'Scout', detail: 'Find related posts with Grok', run: () => enterView('scout') },
+          { label: 'Feeds', detail: 'RSS from the sites in your bookmarks', run: () => enterView('feeds') },
+          { label: 'Neighborhood & sharing', detail: 'Keep or share a connected part of the map', run: seedNeighborhood },
+          { label: 'Combine maps', detail: 'Explore a shared collection alongside yours', run: () => seedGraph ? enterView('blend') : loadDemoCombination() },
+        ] },
+        { label: 'Settings', items: [
+          { label: 'X connection & data', detail: 'Following, live watch and account controls', run: () => { setSelectedId(null); setPermissionsOpen(true); } },
+          { label: 'Map appearance', detail: 'Density, motion and colors', run: () => { enterView('map'); setTuningOpen(true); } },
+          { label: theme === 'dark' ? 'Use light theme' : 'Use dark theme', detail: 'Change the appearance of the app', run: () => setTheme((current) => current === 'dark' ? 'light' : 'dark') },
+          { label: 'Keyboard shortcuts', detail: 'Quick ways to search and explore', run: () => setHelpOpen(true) },
+          { label: 'Activity log', detail: 'See what ran this session', run: () => setTraceOpen((open) => !open) },
+        ] },
+      ]} />
       {paletteOpen ? (
         <div className="palette-back" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
           <div className="palette" role="dialog" aria-label="Search topics, people, and posts" onKeyDown={(event) => {
@@ -3219,24 +3308,7 @@ export default function Home() {
           </div>
         ))}
       </div>
-      <footer className="status-bar">
-        <button className="log-toggle" type="button" onClick={() => setTraceOpen((open) => !open)} aria-pressed={traceOpen} aria-label="Toggle activity log">
-          {liveState === 'off' ? <i className="idle-dot" /> : <i className="live-dot" />}
-          {activity?.kind === 'sync' ? `sync ${activity.current ?? 0}/${activity.total ?? 600}`
-            : activity?.kind === 'rss' ? `rss ${activity.current ?? 0}/${activity.total ?? 0}`
-            : liveState === 'pulling' ? 'pulling bookmarks'
-              : liveState === 'watching' ? 'watch on'
-                : mode === 'live' ? 'watch off'
-                  : mode === 'shared' ? 'shared · log'
-                    : 'demo · log'}
-        </button>
-        <span><b>{totals.bookmark_count}</b> saved</span>
-        <span><b>{totals.following_count ?? 0}</b> following</span>
-        <span className="scout-count"><b>{totals.scout_count ?? scoutCount}</b> scouted</span>
-        <span className="spacer" />
-        <span>~{xReads} X reads</span>
-        <span>{renderedNodes.length} nodes</span>
-      </footer>
+
     </main>
   );
 }
