@@ -1271,6 +1271,7 @@ html[data-theme='light'] .bookmark-library { --library-accent: #356d60; }
 .library-reading summary { cursor: pointer; list-style: none; }
 .library-reading summary::-webkit-details-marker { display: none; }
 .library-reading summary > span { color: var(--fg-soft); display: block; font-size: 15px; line-height: 1.65; max-width: 900px; overflow-wrap: anywhere; }
+.library-reading mark { background: color-mix(in srgb, var(--library-accent) 22%, transparent); border-radius: 2px; color: var(--fg); }
 .library-reading summary small { color: var(--soft); display: inline-block; font: 10px var(--hud); margin-top: 9px; }
 .library-reading summary small::after { content: ' +'; color: var(--library-accent); }
 .library-reading[open] summary > span { display: none; }

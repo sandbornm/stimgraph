@@ -68,7 +68,7 @@ try {
   assert.deepEqual(remaining.trajectories.map((item) => item.id), [version2.id]);
   const page = await request('/');
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /CONCEPT TRAJECTORY/);
+  assert.ok((await page.text()).includes('aria-label="Bookmark library"'), 'The initial page should render the bookmark library; research tools open on demand.');
   assert.equal((await request('/api/data', cookieA, { method: 'DELETE' })).status, 200);
   const afterDelete = await (await request('/api/trajectories', cookieA)).json();
   assert.deepEqual(afterDelete.trajectories, []);

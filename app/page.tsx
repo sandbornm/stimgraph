@@ -1509,6 +1509,7 @@ export default function Home() {
   const [view, setView] = useState<ViewMode>('bookmarks');
   const [toolsOpen, setToolsOpen] = useState(false);
   const [researchToolsOpen, setResearchToolsOpen] = useState(false);
+  const [researchToolsMounted, setResearchToolsMounted] = useState(false);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [syncMessage, setSyncMessage] = useState('');
   const [syncCursor, setSyncCursor] = useState<string | undefined>();
@@ -2849,7 +2850,7 @@ export default function Home() {
               : undefined}
             />
           </div>
-          <TrajectoryWorkbench
+          {researchToolsMounted ? <TrajectoryWorkbench
             key={`${mode}:${connection.profile?.id ?? shareName ?? 'demo'}`}
             nodes={graphNodes} edges={graphEdges} trail={activeExploreTrail} visited={exploreVisited}
             mode={mode} hidden={view !== 'explore' || !researchToolsOpen} onClose={() => setResearchToolsOpen(false)}
@@ -2861,7 +2862,7 @@ export default function Home() {
               setPermissionsOpen(false);
               setGuideIndex(-1);
             }}
-          />
+          /> : null}
           <BookmarkLibrary
             key={`library:${mode}:${connection.profile?.id ?? 'demo'}`}
             mode={mode} demoItems={demoLibrary} revision={libraryRevision}
@@ -3201,7 +3202,8 @@ export default function Home() {
           } },
         ] },
         { label: 'Research & discovery', items: [
-          { label: 'Research workspace', detail: 'Bridges, research cards and saved paths', run: () => { enterView('explore'); setResearchToolsOpen(true); } },
+          { label: 'Organize with Grok', detail: 'Add topics to your saved posts, one batch at a time', run: () => enterView('threads') },
+          { label: 'Research workspace', detail: 'Bridges, research cards and saved paths', run: () => { enterView('explore'); setResearchToolsMounted(true); setResearchToolsOpen(true); } },
           { label: 'Scout', detail: 'Find related posts with Grok', run: () => enterView('scout') },
           { label: 'Feeds', detail: 'RSS from the sites in your bookmarks', run: () => enterView('feeds') },
           { label: 'Neighborhood & sharing', detail: 'Keep or share a connected part of the map', run: seedNeighborhood },

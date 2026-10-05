@@ -60,9 +60,13 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Test
         run: pnpm test
+      - name: Profile search with synthetic data
+        run: pnpm --silent profile:search >> "$GITHUB_STEP_SUMMARY"
       - name: Lint
         run: pnpm lint
       - name: Check types
         run: pnpm typecheck
       - name: Build
         run: pnpm build
+      - name: Test API with isolated D1
+        run: pnpm test:api

@@ -47,7 +47,7 @@ export function ResearchBench({ index, anchorId, mode, hidden }: Props) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (mode !== 'live') return;
+    if (mode !== 'live' || hidden || !loading) return;
     const controller = new AbortController();
     fetch('/api/research', { cache: 'no-store', signal: controller.signal }).then(async (response) => {
       if (!response.ok) throw new Error('Saved research cards could not be loaded.');
@@ -56,7 +56,7 @@ export function ResearchBench({ index, anchorId, mode, hidden }: Props) {
     }).catch((error: Error) => { if (!controller.signal.aborted) setLoadError(error.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [mode, loadAttempt]);
+  }, [mode, loadAttempt, hidden, loading]);
 
   const run = async (label: string, action: () => Promise<void>) => {
     if (busy) return;

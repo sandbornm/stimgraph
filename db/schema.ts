@@ -29,6 +29,7 @@ export const bookmarks = sqliteTable(
     primaryKey({ columns: [table.ownerId, table.postId] }),
     index('idx_bookmarks_owner_author').on(table.ownerId, table.authorId),
     index('idx_bookmarks_owner_created').on(table.ownerId, table.createdAt),
+    index('idx_bookmarks_owner_imported').on(table.ownerId, table.syncedAt, table.createdAt, table.postId),
   ],
 );
 
