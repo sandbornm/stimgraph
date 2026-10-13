@@ -113,4 +113,4 @@ pnpm run check        # typecheck + lint + unit tests
 pnpm run build:local  # Next.js production build
 ```
 
-Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLite integration test on Node 24, and a gitleaks history scan. Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
