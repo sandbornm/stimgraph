@@ -1,3 +1,4 @@
+import { X_DISCLAIMER } from './legal';
 export const AGENT_GUIDE = `# Stimgraph — agent guide
 
 Read-only access to one person's saved X bookmarks, with topics. Tailnet only.
@@ -19,4 +20,7 @@ with the Stimgraph session. No writes, no tokens, no secrets are exposed.
 ## Tips
 Start with /api/agent/topics, then filter bookmarks by topic. Topics prefixed "kw-"
 are keyword clusters for posts that have no AI/hashtag topic yet.
+
+## Disclaimer
+${X_DISCLAIMER}
 `;

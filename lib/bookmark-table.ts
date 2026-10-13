@@ -17,7 +17,7 @@ export type TopicCount = TableTopic & { count: number };
 
 const STOPWORDS = new Set(('a an and are as at be but by for from has have how i if in into is it its just like more my new no not of on or our out so than that the their them then there these they this to up us was we what when which who why will with you your about after all also any can do does get got here im it’s just make most much now one only over really should some still thing think very via way would rt amp https http co been being were had did done going want need even every other first back see good great people person time times today day days week year years work post posts know thanks thank lol yes yeah right well many much less lot lots something anything everything things look looks big little best better because where while before since through again never always maybe ever own same each both few those let use used using said says say tell made makes making take come gonna dont doesnt cant isnt youre thats theres heres whats').split(' '));
 
-export function slugTopic(label: string) {
+function slugTopic(label: string) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 }
 

@@ -1,73 +1,90 @@
 # Stimgraph
 
-Stimgraph helps you explore saved material, connect ideas, and develop research questions grounded in your sources. It starts with a private graph of your X bookmarks. **STIM** means **Stuff That Interests Me**.
+**STIM = Stuff That Interests Me.** Stimgraph imports your X bookmarks into a private, local database and gives you a searchable table with topic chips, a graph/globe explorer, research tools, and a read-only link that AI agents can use to search and summarize your saves.
 
-The map shows each saved post as a small particle near its author and topics. Solid lines trace direct bookmark evidence. Dotted lines show authors or topics that overlap across saved posts; those lines do not change the source ranking. Cyan diamonds are Grok scout finds: posts on X that fit the map but are not bookmarks yet.
+> **Disclaimer.** Not affiliated with, endorsed by, or sponsored by X Corp. X is a trademark of X Corp. Users must supply their own X API credentials and comply with the [X Developer Agreement and Policy](https://developer.x.com/en/developer-terms/agreement-and-policy).
 
-Explore opens with a flat branching view. Start with a topic or bookmark, then follow its connections and preview one step beyond. Choose LR (left to right) or TB (top to bottom). In LR, ↑/↓ chooses a branch, → follows it, and ← goes back. In TB, ←/→ chooses, ↓ follows, and ↑ goes back. The visible arrow pad uses the same controls. Open the reader for full saved text, supporting posts, and related ideas; sharing and graph tools are under More actions.
+> **License: TODO.** No license has been chosen yet. Until one is added, all rights are reserved and this repository is private.
 
-Forward branches exclude items already on the current trail. A branch ends when all its connections lead back; the trail and Back controls still let you revisit earlier items. The trail, orientation, and visited markers last for the current session. New connections append to the current branch list when the graph updates. Globe keeps the original rotating view.
+Detailed feature behavior lives in [docs/FEATURES.md](docs/FEATURES.md). Operating the always-on Mac service: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Product direction and history: [docs/PRODUCT.md](docs/PRODUCT.md), [docs/LAUNCH.md](docs/LAUNCH.md), [docs/HANDOFF.md](docs/HANDOFF.md). Rules for coding agents: [AGENTS.md](AGENTS.md).
 
-The explorer builds each branch from existing graph edges. A saved post can belong to several topics; branches are routes through that graph, not a fixed topic hierarchy. Each link explains whether it comes from a saved post, overlapping bookmark patterns, or following an account. Scout suggestions are optional and labeled separately. Exploring does not make additional AI requests.
+## Two ways to run it
 
-**Concept trajectories** turn a route into something you can return to. Follow a few steps, choose **Shape this path**, and add a name and a question or notes. The outline shows the concepts along the path and the relationship behind each step. **Still worth a look** surfaces nearby saved posts you have not visited this session. Choosing one branches from its actual connection on the path.
+| | Development mode | Always-on mode |
+| --- | --- | --- |
+| What it is | `pnpm dev` (Vite + Cloudflare Workers runtime via Miniflare) on `http://127.0.0.1:3001` | Production Next.js server on `127.0.0.1:3001`, published privately with Tailscale Serve, supervised by launchd |
+| OS | macOS, Linux, Windows (anything Node and workerd support) | **macOS only** |
+| Node | 22.13+ (`.nvmrc` pins 22) | **24.15+** (uses `node:sqlite`; tested on 24.17) |
+| Storage | Local D1/SQLite under `.wrangler/` | `.tailnet/state/stimgraph.sqlite` |
+| Credentials | `.env.local` | Keychain items (preferred) — see DEPLOYMENT.md |
+| Bookmark import | When you press Sync, plus a visible tab checks the newest 15 every 90 s | Background poll every 6 h, plus a one-time backfill |
+| Agent link | Requires your browser session | `https://<host>.<tailnet>.ts.net/agents` from your tailnet |
 
-Connected accounts save trajectories privately in the app database; there is no public trajectory URL. Each save creates a separate version, so resuming or branching never overwrites an earlier path. Missing nodes and connections remain visible in saved outlines, and resuming uses only the connected portion of the current map. Demo/shared collections keep trajectories for the current page session. **Export outline .md** downloads route labels and your notes, without full saved-post text. Deleting the local map also deletes its saved trajectories.
+## Quick start (development mode)
 
-**Bridge A → B** connects two concepts in the loaded map. Up to three routes are shown, with a shared saved post behind every concept hop. Routes are limited to six hops and can be opened as trajectories. The finder excludes author/following shortcuts and affinity-only links; a topic assignment is evidence of how the collection is organized, not proof that one idea follows from another.
+Prerequisites:
 
-**Ask Grok** is an explicit, optional bridge action. It sends concept labels and at most 24 excerpts of 400 characters each to xAI, using opaque references in place of source IDs and excluding account profiles and X credentials. Grok chooses a supplied route and explains its steps. The server checks route and hop references. If the loaded collection has no supported route, Grok may suggest an unverified research direction; those suggestions never become graph edges automatically. The request uses no search tools and `store: false`, with a 60-second timeout. Each account gets at most one request per 20 seconds and 12 per rolling 24 hours; failed provider attempts also count. Only request IDs and timestamps are retained for this limit, and stale records are removed when that account next requests a bridge. Optional xAI retention policies still apply.
+1. **Node 22.13+** (`nvm use` reads `.nvmrc`) and **pnpm 10** (`corepack enable`; the version is pinned in `package.json`).
+2. **Your own X developer app.** Create one in the [X Developer Console](https://console.x.com/). X API access is paid and its plans/pricing change; check the console before relying on it. Every bookmark sync, follow import, and background poll consumes X reads billed to *your* app.
+   - Type: confidential **Web App, Automated App or Bot**. Permissions: **Read**.
+   - OAuth 2.0 scopes requested by Stimgraph (exactly): `tweet.read users.read bookmark.read follows.read offline.access`. No write scopes.
+   - Callback URL (must match `X_REDIRECT_URI` exactly):
+     - Development: `http://127.0.0.1:3001/api/auth/x/callback`
+     - Always-on: `https://<host>.<tailnet>.ts.net/api/auth/x/callback`
+   - Website URL: any public page you own (it is only a label).
+3. **Optional: an xAI API key** for Grok topic enrichment, scouting, bridges, and research drafts. Everything else works without it.
 
-**Research bench** turns selected bookmarks into a research candidate. Choose 2–8 sources and a lens: transfer a method, find a tension, find a shared problem, change a constraint, or find missing evidence. Stay close suggests posts with overlapping topics; Reach further suggests less overlap. These are starting sets, not novelty scores. Open each source to record why you saved it, including disagreement.
+Then:
 
-Write a card yourself, or explicitly choose **Draft with Grok**. The card separates a question, method, problem, proposed connection, assumptions, counterexamples, and a smallest investigation from source quotations. Generated quotations are checked against the supplied excerpts; the interpretation still needs review. Grok receives only the selected redacted excerpts (at most eight × 800 characters) and save-intent annotations, using opaque references. Links and handles are redacted, but identifying details can remain in prose. It receives no X credentials and has no search tools. Requests use `store: false`, a 60-second timeout, and a separate limit of one every 20 seconds and 12 per rolling day.
+```bash
+cp .env.example .env.local   # fill in values yourself; never commit or paste this file
+pnpm install --ignore-scripts
+pnpm dev                      # http://127.0.0.1:3001
+```
 
-**Search nearby work · Crossref** sends only the editable, user-reviewed query to Crossref's public metadata API. The card keeps up to five titles, authors, publication years, DOI links, the actual query, and its completion time. This is a limited bibliographic search, not a full literature review or proof of novelty. Empty results say so explicitly. Failed searches preserve the previous record. Searches are limited to one every two seconds and 30 per rolling day; external attempts count even when a provider fails. No account identity, source text, or X credentials accompany the query. [Crossref public access](https://www.crossref.org/documentation/retrieve-metadata/rest-api/access-and-authentication/).
+Open the app and press **Connect X**. Before you connect, the app shows a built-in **demo collection** (labeled DEMO, fake accounts and posts) so you can try the interface; your data replaces it once connected in that browser.
 
-Research cards save privately as separate versions (up to 100 per account). Demo/shared mode keeps cards only for the current page session and uses manual drafting. Export includes your notes and selected quotations; cards are excluded from map shares. Deleting local data deletes the cards and research request counters. Missing source material stays visible in saved cards; a new save checks source ownership and quotations against current bookmarks. The app does not turn generated hypotheses into graph edges or start a research agent automatically.
+## Environment variables
 
-Email-based app identity is a separate launch step. The current prototype still uses the connected X account as the data owner. See [LAUNCH.md](LAUNCH.md) for the proposed email-login and X-connection model; it has not been enabled or deployed.
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `X_CLIENT_ID` | yes | — | OAuth 2.0 client ID of your X app |
+| `X_CLIENT_SECRET` | yes | — | OAuth 2.0 client secret; also encrypts stored X tokens (changing it forces reconnect) |
+| `X_REDIRECT_URI` | yes | — | Exact callback URL registered in the X app |
+| `XAI_API_KEY` | no | empty (Grok features off) | xAI key for optional Grok features |
+| `NEXT_PUBLIC_SITE_URL` | no | `http://127.0.0.1:3001` | Public URL for social metadata |
+| `STIMGRAPH_TAILNET` | always-on | `false` | Enables Tailscale identity checks and HTTPS origin handling |
+| `STIMGRAPH_TAILNET_LOGIN` | always-on | — | The one Tailscale login allowed to use the app remotely |
+| `STIMGRAPH_PUBLIC_ORIGIN` | always-on | — | `https://<host>.<tailnet>.ts.net` |
+| `STIMGRAPH_DATABASE` | always-on | — | Absolute path of the SQLite database |
+| `STIMGRAPH_BACKGROUND_POLL` | no | `false` | `true` polls connected accounts every 6 h |
+| `STIMGRAPH_CREDENTIAL_SOURCE` | no | `none` | `keychain` loads X/xAI credentials from macOS Keychain at startup |
+| `STIMGRAPH_AGENT_API` | no | on | `off` disables tailnet (cookie-less) agent access |
+| `STIMGRAPH_AGENT_LOGINS` | no | empty | Optional allowlist of Tailscale logins for the agent API. Empty means any login that passes the tailnet gate, which in always-on mode is only `STIMGRAPH_TAILNET_LOGIN` |
 
-Connect X once. The handshake and tokens live in the local database; the browser only keeps a small httpOnly cookie (`stim_x_session`) for 180 days. You should not need to reconnect on every refresh or dev-server restart. Disconnect, deleting local data, or revoking the app in X will clear it.
+The always-on variables are written into the LaunchAgent by `scripts/install-tailnet-service.mjs` from `.tailnet/service.json`; you do not set them by hand. Secrets never go in the plist.
 
-The map is a graph: you at the pole, people and topics around you, saved posts near authors. Solid lines are bookmark evidence. Short dashes are topic/author overlap. Longer dotted hairlines are accounts you follow. Search with `/` or ⌘K; `@` people, `#` topics, `~` following, `:` commands.
+## Limits and expectations
 
-X does not expose a bookmark webhook on this API, so a connected tab polls the newest 15 bookmarks every 90 seconds while it is visible. New saves flash on the field. Sync also imports who you follow: those accounts appear as quieter people on the globe, and bookmark authors you already follow are marked. Grok scout is a separate action: it searches X with `x_search` against your top topics, frequent authors, and followed accounts. Optionally keep scouting every 12 minutes while the tab stays open.
+- **X returns only your newest ~800 bookmarks.** Older saves cannot be imported through the API. If you have fewer, you get all of them (e.g. one account had 199).
+- Always-on polling runs every **6 hours** (reads 20 per page, up to 5 pages, stops at the first already-stored post). The first poll after setup does a one-time **backfill** of up to 800 without stopping early.
+- Polling cannot detect un-bookmarking, and post creation time is not bookmark time.
+- Topic chips come from hashtags and Grok topics; posts without either get simple keyword chips (`kw-…`). There are no embeddings yet.
+- Single owner: the app assumes one connected X account per database.
 
-You can drag, zoom, select, search, filter by signal type, or jump to a random node. The interaction direction credits [Kat ⊷ the Poet Engineer’s gestural latent-space work](https://x.com/poetengineer__/status/1821654144958202077); the visual design and implementation here are original.
+## Where data lives
 
-Select any node to grow a two-step neighborhood around it. Neighborhoods export as `.stimgraph` files that contain people, topics, and connection weights. They exclude saved-post nodes and bookmark text. Importing someone else’s neighborhood places both graphs in one field; matching people and topics become shared bridge nodes.
+- Bookmarks, topics, OAuth sessions (tokens encrypted with `X_CLIENT_SECRET`), trajectories, and research cards: the local database (see table above). Protect it and its backups; enable FileVault on the always-on Mac.
+- The browser holds only an httpOnly session cookie (`stim_x_session`, 180 days) and UI preferences.
+- Nothing is sent to xAI or Crossref unless you press the corresponding action; see the permission boundary below.
 
-The Tune panel changes particle density, the minimum visible connection strength, motion, labels, and color. It can hide dotted affinity links or the on-screen guide. Quiet, Balanced, and Charged presets provide useful starting points. These preferences stay in the browser on the current device.
+## Security model
 
-## Local setup
-
-For continuous background polling, a resumable agent activity feed, and private Tailscale HTTPS, see [DEPLOYMENT.md](DEPLOYMENT.md). It uses a production Node server supervised by macOS and supports operator-provisioned Keychain credentials without reading repository environment files.
-
-Use Node 22.13 or newer and pnpm.
-
-1. In the [X Developer Console](https://console.x.com/), configure the app as a confidential **Web App, Automated App or Bot**.
-2. Leave app permissions on **Read**.
-3. Set the callback URL to `http://127.0.0.1:3001/api/auth/x/callback`.
-4. Set the website URL to `http://127.0.0.1:3001`.
-5. Put the credentials in `.env.local`, following `.env.example`. Never commit or paste that file into chat.
-6. Install and run:
-
-   ```bash
-   pnpm install --ignore-scripts
-   pnpm dev
-   ```
-
-Then open `http://127.0.0.1:3001`.
-
-Required server credentials:
-
-- `X_CLIENT_ID`: the OAuth 2.0 client ID for the X app.
-- `X_CLIENT_SECRET`: the OAuth 2.0 client secret for the X app.
-- `X_REDIRECT_URI`: exactly `http://127.0.0.1:3001/api/auth/x/callback` for local development.
-- `XAI_API_KEY`: a dedicated xAI API key used for optional topic enrichment, Grok scout, bridges, and research drafts.
-
-`NEXT_PUBLIC_SITE_URL` is non-secret and defaults to `http://127.0.0.1:3001` for social metadata.
+- The server binds to **127.0.0.1** only, never a LAN interface.
+- Always-on mode is reached through **Tailscale Serve** (private HTTPS; Funnel is not enabled). Serve sets and sanitizes the `Tailscale-User-Login` header, and the app trusts that header **only** because the listener is loopback-only; any local process on the Mac can impersonate it. Requests must carry the configured login; tagged devices are denied.
+- The agent API is **read-only** and never returns tokens. It answers to the browser session, or (always-on mode only) to the configured Tailscale login on a `*.ts.net` host. Disable it with `STIMGRAPH_AGENT_API=off`.
+- Keychain under the same macOS login is **not** isolation from local coding agents; see DEPLOYMENT.md for a stronger setup.
+- Dependency install scripts are disabled (`--ignore-scripts`). Secret files are never read by tooling; see AGENTS.md.
 
 ## Permission boundary
 
@@ -79,26 +96,21 @@ Stimgraph requests these OAuth scopes:
 - `users.read` to identify authors.
 - `offline.access` to refresh the connection when the user requests a later sync.
 
-It does not request write scopes and cannot post, like, follow, or change bookmarks. Development import starts on request; the opt-in private deployment in [DEPLOYMENT.md](DEPLOYMENT.md) polls connected accounts in the background. If you connected before following import existed, reconnect so X can grant `follows.read`. In the [X Developer Console](https://console.x.com/), add `follows.read` to the app’s user-authentication scopes.
+It does not request write scopes and cannot post, like, follow, or change bookmarks. Development import starts on request; the opt-in private deployment in [DEPLOYMENT.md](docs/DEPLOYMENT.md) polls connected accounts in the background. If you connected before following import existed, reconnect so X can grant `follows.read`. In the [X Developer Console](https://console.x.com/), add `follows.read` to the app’s user-authentication scopes.
 
 Grok enrichment is a separate action. Pressing it sends the next 40 bookmark texts and author handles to xAI; it never sends the X access token. Grok scout sends only topic labels and frequent author handles, then searches X. Requests use `store: false`. xAI documents a default 30-day abuse-monitoring retention period unless the API team has Zero Data Retention enabled, and says API inputs and outputs are not used for training without explicit permission. See [xAI API security](https://docs.x.ai/developers/faq/security) and [current pricing](https://docs.x.ai/developers/pricing).
 
 The app exposes separate controls to disconnect the browser session or delete the locally stored graph. Withdrawing the X app’s account-level authorization is done in X account settings.
 
-## Verification
+## Agent access (read-only)
+
+Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. No MCP server or install is needed.
+
+## Checks
 
 ```bash
-pnpm test
-pnpm run lint
-pnpm exec tsc --noEmit
-pnpm run build
+pnpm run check        # typecheck + lint + unit tests
+pnpm run build:local  # Next.js production build
 ```
 
-Agent verification must run in an isolated source copy without local environment files, using inert values passed directly to the process. See [HANDOFF.md](HANDOFF.md) for the current state and remaining launch work.
-
-## Agent access (read-only, tailnet)
-
-Point an agent at `https://<your-host>.ts.net/agents` (or `/llms.txt`). JSON endpoints:
-`/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`.
-Access requires the browser session or a Tailscale Serve request (`Tailscale-User-Login` + `*.ts.net` host).
-Optional: `STIMGRAPH_AGENT_LOGINS=a@x.com,b@y.com` allowlist; `STIMGRAPH_AGENT_API=off` disables tailnet access.
+Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

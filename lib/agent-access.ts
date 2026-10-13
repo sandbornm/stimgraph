@@ -11,13 +11,15 @@ import { keywordTopics, type TableRow } from './bookmark-table';
  *  2. A tailnet caller: Tailscale Serve sets `Tailscale-User-Login` on proxied
  *     requests and the Host is the *.ts.net name. If STIMGRAPH_AGENT_LOGINS is set
  *     (comma-separated logins), the caller must be on that list.
- *     Set STIMGRAPH_AGENT_API=off to disable path 2 entirely.
+ *     Path 2 applies only when STIMGRAPH_TAILNET=true; set STIMGRAPH_AGENT_API=off to disable it.
  * Responses are read-only and never contain tokens, cookies or secrets.
  */
 export async function resolveAgentOwner(request: NextRequest): Promise<{ ownerId: string; via: 'session' | 'tailnet' } | null> {
   const active = await getActiveXSession(request);
   if (active) return { ownerId: active.session.profile.id, via: 'session' };
   if ((getRuntimeValue('STIMGRAPH_AGENT_API') ?? '').toLowerCase() === 'off') return null;
+  // The identity header is only trustworthy behind Tailscale Serve (always-on mode).
+  if (getRuntimeValue('STIMGRAPH_TAILNET') !== 'true') return null;
   const login = request.headers.get('tailscale-user-login')?.trim();
   const host = (request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '').split(':')[0];
   if (!login || !host.endsWith('.ts.net')) return null;

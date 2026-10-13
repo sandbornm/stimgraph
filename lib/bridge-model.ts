@@ -13,7 +13,7 @@ export type BridgeInterpretation = {
   suggestedConcepts: string[];
   nextQuestion: string;
 };
-export const BRIDGE_MAX_HOPS = 6;
+const BRIDGE_MAX_HOPS = 6;
 const pairKey = (a: string, b: string) => JSON.stringify([a, b].sort());
 
 /** A conceptual link needs a saved post assigned to both topics. */

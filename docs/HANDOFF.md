@@ -1,6 +1,6 @@
 # Stimgraph handoff
 
-Updated September 4, 2026.
+Originally written September 4, 2026. **Status as of October 13, 2026:** an always-on private deployment now runs on a Mac over Tailscale (see [DEPLOYMENT.md](DEPLOYMENT.md)), with the bookmark table, read-only agent API (`/agents`, `/llms.txt`, `/api/agent/*`), and a one-time bookmark backfill. Statements below about "no deployment" refer to the September change only. The [README](../README.md) is the source of truth for setup.
 
 The mission is to help people explore saved material, connect ideas, and develop research questions grounded in their sources. [PRODUCT.md](PRODUCT.md) describes the product direction; [LAUNCH.md](LAUNCH.md) separates what exists from the proposed closed launch.
 
@@ -23,7 +23,7 @@ Research roles and connections are interpretations. Quotation checks establish t
 
 ## Verification
 
-- 48 model/provider tests cover graph exploration, trails, bridges, trajectories, research validation, citation matching, and provider request boundaries. Grok and Crossref are mocked; live generation and search quality remain to be assessed with explicitly chosen examples.
+- (September) 48 model/provider tests; 58 unit tests as of October 13 cover graph exploration, trails, bridges, trajectories, research validation, citation matching, and provider request boundaries. Grok and Crossref are mocked; live generation and search quality remain to be assessed with explicitly chosen examples.
 - TypeScript, ESLint, and the Vinext production build passed in an isolated source copy without local environment files.
 - All SQL migrations apply to an empty database. Additive migrations `0001`–`0003` can also be reapplied alongside runtime schema initialization.
 - Isolated API tests passed for trajectory and research persistence, ownership, versioning, private cache headers, quotation validation, concurrency limits, record caps, and deletion. No live provider requests ran.

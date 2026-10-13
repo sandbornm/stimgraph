@@ -1,6 +1,7 @@
 'use client';
 
 import { lazy, memo, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { X_DISCLAIMER } from '@/lib/legal';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import {
   SELF_NODE_ID,
@@ -3152,6 +3153,7 @@ export default function Home() {
           <input ref={importRef} className="capsule-input" type="file" accept=".stimgraph,application/json" onChange={importNeighborhood} />
           <footer className="inspiration-credit">
             Interaction credit: <a href="https://x.com/poetengineer__/status/1821654144958202077" target="_blank" rel="noreferrer">Kat ⊷ the Poet Engineer’s gestural latent-space work</a>. Stimgraph’s design and code are original.
+            <br />{X_DISCLAIMER}
           </footer>
           </aside>
           ) : null}
@@ -3271,6 +3273,7 @@ export default function Home() {
         <span className="spacer" />
         <span>~{xReads} X reads</span>
         <span>{renderedNodes.length} nodes</span>
+        <span className="x-disclaimer" title={X_DISCLAIMER}>Not affiliated with X Corp.</span>
       </footer>
     </main>
   );

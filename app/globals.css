@@ -1249,3 +1249,4 @@ html[data-theme='light'] .trajectory { --path: #356d60; }
 .rail-more summary::-webkit-details-marker { display: none; }
 .agents-page { max-width: 760px; margin: 40px auto; padding: 0 20px; }
 .agents-page pre { white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
+.x-disclaimer { opacity: .6; font-size: 11px; }

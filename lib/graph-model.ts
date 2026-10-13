@@ -15,7 +15,7 @@ export function isSelfId(id: string) {
   return id === SELF_NODE_ID;
 }
 
-export function isFollowOnlyEvidence(evidence: string) {
+function isFollowOnlyEvidence(evidence: string) {
   return evidence.startsWith('Following');
 }
 
