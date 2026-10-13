@@ -76,7 +76,7 @@ const Row = memo(function Row({ row, active, onTopic }: { row: TableRow; active:
     <tr>
       <td className="bm-author"><a href={`https://x.com/${row.handle}`} target="_blank" rel="noreferrer">@{row.handle}</a></td>
       <td className="bm-text"><a href={row.url} target="_blank" rel="noreferrer">{text.length > 180 ? `${text.slice(0, 179)}…` : text || 'Saved post'}</a></td>
-      <td className="bm-date">{row.createdAt ? dateFmt.format(new Date(row.createdAt)) : ''}</td>
+      <td className="bm-date">{row.createdAt && !Number.isNaN(Date.parse(row.createdAt)) ? dateFmt.format(new Date(row.createdAt)) : '—'}</td>
       <td className="bm-topics">{row.topics.map((t) => (
         <button key={t.id} type="button" className={`bm-chip ${active.includes(t.id) ? 'on' : ''}`} onClick={() => onTopic(t.id)}>{t.label}</button>
       ))}</td>

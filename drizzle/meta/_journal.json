@@ -36,6 +36,13 @@
       "when": 1789241644118,
       "tag": "0004_bookmark_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792000000000,
+      "tag": "0005_bookmark_backfill",
+      "breakpoints": true
     }
   ]
 }

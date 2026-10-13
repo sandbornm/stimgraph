@@ -4,7 +4,7 @@ import { getStoredXSession } from './x-auth-server';
 import { iterateXBookmarks } from './x-bookmarks';
 import { getRuntimeValue } from './runtime-env';
 import { XRequestError } from './x-errors';
-import { POLL_INTERVAL_MS, POLL_LEASE_MS, pollDelay } from './background-policy';
+import { BACKFILL_LIMIT, BACKFILL_PAGE_SIZE, POLL_INTERVAL_MS, POLL_LEASE_MS, nextPageStep, pollDelay } from './background-policy';
 import { withOwnerWork } from './owner-work';
 
 export async function pollConnectedAccounts() {
@@ -25,8 +25,8 @@ export async function pollConnectedAccounts() {
       const claimed = await d1.prepare(`UPDATE bookmark_sync_state
         SET lease_until = ?, last_started_at = ?, status = 'polling'
         WHERE owner_id = ? AND next_poll_at <= ? AND lease_until < ?
-        RETURNING failures, continuation`).bind(now + POLL_LEASE_MS, now, stored.owner_id, now, now)
-        .first<{ failures: number; continuation: string | null }>();
+        RETURNING failures, continuation, backfill_completed_at`).bind(now + POLL_LEASE_MS, now, stored.owner_id, now, now)
+        .first<{ failures: number; continuation: string | null; backfill_completed_at: number | null }>();
       if (!claimed) return;
       let fetched = 0;
       let continuation: string | null = claimed.continuation;
@@ -37,20 +37,32 @@ export async function pollConnectedAccounts() {
             next_poll_at = ? WHERE owner_id = ?`).bind(now + POLL_INTERVAL_MS, stored.owner_id).run();
           return;
         }
-        // Most polls read one page. Catch up across a persisted cursor when a burst
-        // exceeds five pages, instead of silently dropping saves beyond the limit.
+        // Most polls read one page and stop at overlap. Until the one-time backfill
+        // completes, page past overlap through X's newest ~800 bookmarks instead.
+        const backfill = claimed.backfill_completed_at == null;
+        let backfillDone = false;
+        let calls = 0;
         for await (const page of iterateXBookmarks({ accessToken: active.session.accessToken,
-          userId: stored.owner_id, limit: 100, pageSize: 20, startToken: continuation ?? undefined })) {
+          userId: stored.owner_id, limit: backfill ? BACKFILL_LIMIT : 100,
+          pageSize: backfill ? BACKFILL_PAGE_SIZE : 20, startToken: continuation ?? undefined })) {
+          calls += 1;
           const saved = await storeBookmarks({ owner: active.session.profile, bookmarks: page.bookmarks,
             skipUnchanged: true, optimize: false });
           fetched += page.bookmarks.length;
-          const overlap = saved.inserted < page.bookmarks.length;
-          continuation = overlap ? null : page.nextToken ?? null;
-          if (overlap || !continuation) break;
+          const step = nextPageStep({ backfill, inserted: saved.inserted, received: page.bookmarks.length,
+            nextToken: page.nextToken, fetched });
+          continuation = step.continuation;
+          backfillDone = step.backfillDone;
+          if (step.stop) break;
         }
+        // The iterator also ends when the limit is reached; that completes a backfill too.
+        if (backfill && !continuation) backfillDone = true;
+        if (backfill) console.info(`[stimgraph] bookmark backfill ${backfillDone ? 'completed' : 'paused'}: ${fetched} fetched in ${calls} X calls`);
         await d1.prepare(`UPDATE bookmark_sync_state SET lease_until = 0, failures = 0,
-          last_succeeded_at = ?, next_poll_at = ?, status = 'ok', fetched = ?, continuation = ?
-          WHERE owner_id = ?`).bind(Date.now(), Date.now() + POLL_INTERVAL_MS, fetched, continuation, stored.owner_id).run();
+          last_succeeded_at = ?, next_poll_at = ?, status = 'ok', fetched = ?, continuation = ?,
+          backfill_completed_at = COALESCE(backfill_completed_at, ?)
+          WHERE owner_id = ?`).bind(Date.now(), Date.now() + POLL_INTERVAL_MS, fetched, continuation,
+          backfillDone ? Date.now() : null, stored.owner_id).run();
       } catch (error) {
         const failures = claimed.failures + 1;
         const status = error instanceof XRequestError ? `x_${error.status}` : 'temporary_error';

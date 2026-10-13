@@ -14,9 +14,19 @@ describe('bookmark table', () => {
     assert.equal(filterRows(rows, {}).length, 2);
   });
   it('clusters keywords only for untagged rows', () => {
-    const rows = keywordTopics([row('1', 'agents and evals'), row('2', 'better evals for agents'), row('3', 'x', [{ id: 't', label: 'T' }])]);
+    const rows = keywordTopics([row('1', 'agents and evals'), row('2', 'better evals for agents'), row('3', 'x', [{ id: 't', label: 'T' }])], 12, 2);
     assert.ok(rows[0].topics.some((t) => t.label === 'evals'));
     assert.deepEqual(rows[2].topics, [{ id: 't', label: 'T' }]);
+  });
+  it('drops filler words and keywords seen fewer than three times', () => {
+    const rows = keywordTopics([
+      row('1', 'Been working on agents today, years of time'),
+      row('2', 'agents post: been a good time today'),
+      row('3', 'agents everywhere, been years'),
+      row('4', 'evals and agents'),
+    ]);
+    const labels = new Set(rows.flatMap((r) => r.topics.map((t) => t.label)));
+    assert.deepEqual([...labels], ['agents']);
   });
   it('counts topics and clamps limits', () => {
     assert.deepEqual(topicCounts([row('1', 'a', [{ id: 'x', label: 'X' }]), row('2', 'b', [{ id: 'x', label: 'X' }])]), [{ id: 'x', label: 'X', count: 2 }]);
