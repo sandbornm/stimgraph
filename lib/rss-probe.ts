@@ -178,26 +178,3 @@ export async function probeOrigin(origin: string): Promise<FeedProbe> {
     };
   }
 }
-
-export async function probeOrigins(origins: string[], onEach?: (probe: FeedProbe) => void) {
-  const unique = [...new Set(
-    origins
-      .map((origin) => hostFromUrl(origin) ?? hostFromUrl(`https://${origin}`))
-      .filter((host): host is string => Boolean(host)),
-  )].map(originFromHost);
-  const results: FeedProbe[] = [];
-  const queue = unique.slice(0, 24);
-  const workers = 4;
-  let cursor = 0;
-  async function worker() {
-    while (cursor < queue.length) {
-      const index = cursor;
-      cursor += 1;
-      const probe = await probeOrigin(queue[index]);
-      results.push(probe);
-      onEach?.(probe);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(workers, queue.length) }, () => worker()));
-  return results;
-}

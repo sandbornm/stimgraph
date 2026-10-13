@@ -2,7 +2,6 @@ import { requireRuntimeValue } from './runtime-env';
 
 export const X_SESSION_COOKIE = 'stim_x_session';
 export const X_STATE_COOKIE = 'stim_x_oauth_state';
-export const X_VERIFIER_COOKIE = 'stim_x_pkce_verifier';
 
 export type XProfile = {
   id: string;

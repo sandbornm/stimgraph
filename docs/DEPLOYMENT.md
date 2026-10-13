@@ -1,4 +1,6 @@
-# Private Mac deployment
+# Private Mac deployment (always-on mode)
+
+macOS only. Requires Tailscale, launchd, and (optionally) Keychain. The [README](../README.md) covers prerequisites, environment variables, and the security model; this file covers operating the service. Replace `<host>.<tailnet>.ts.net` with your machine's Tailscale HTTPS name. Create `.tailnet/service.json` (gitignored, non-secret) with `port`, `publicOrigin`, `tailnetLogin`, and optional `credentialSource: "keychain"`.
 
 The local deployment uses a production Next.js Node server on `127.0.0.1:3001`, Tailscale Serve on private HTTPS port 443, and a per-user macOS LaunchAgent. Tailscale is installed separately. The project-authored `scripts/install-tailnet-service.mjs` writes one plist and loads it with `launchctl`; it does not install or configure Tailscale. The LaunchAgent executes `next start` directly. `.mjs` is Node's JavaScript module extension, not a separate installation system.
 
@@ -6,7 +8,7 @@ The Cloudflare/Vinext build remains available. Miniflare is used only for isolat
 
 ## Endpoint and behavior
 
-- App: `https://minimus-mac-mini.tailcba5f3.ts.net/`
+- App: `https://<host>.<tailnet>.ts.net/`
 - Health: `/api/health`; configuration state, connected-account count, and scheduler heartbeat, without credentials.
 - Agent feed: `/api/activity?after=0&limit=100`.
 - Local listener: `127.0.0.1:3001`, never a wildcard/LAN listener.
@@ -14,7 +16,7 @@ The Cloudflare/Vinext build remains available. Miniflare is used only for isolat
 
 Remote requests must have the configured Tailscale login. Serve supplies and sanitizes this identity header. Local processes on the host are trusted; loopback is not an isolation boundary between local users. Feed reads require either an owner session or the configured Tailscale identity on this single-owner deployment. Multiple stored owners cause identity-based access to fail closed. Tagged devices do not receive user-login headers and are denied; supporting them requires an explicit capability policy.
 
-The scheduler wakes every minute to check whether work is due and polls X approximately every **six hours** (four scheduled polls per day). The first poll starts after connecting. It reads 20 bookmarks per page, at most five pages per account per poll, stops when it overlaps previously imported material, and persists continuation state for catch-up after restarts. Failures back off to 12 then 24 hours, respecting longer X retry/reset headers. A durable lease prevents overlapping polling. Browser and scheduler requests share token rotation; transient failures preserve the connection. Reading cached activity does not trigger a poll.
+The scheduler wakes every minute to check whether work is due and polls X approximately every **six hours** (four scheduled polls per day). The first poll starts after connecting. It reads 20 bookmarks per page, at most five pages per account per poll, stops when it overlaps previously imported material, and persists continuation state for catch-up after restarts. On the first poll after upgrading, a **one-time backfill** instead pages 100 at a time through X's newest ~800 bookmarks without stopping at overlap, then records `bookmark_sync_state.backfill_completed_at` so it never reruns. Failures back off to 12 then 24 hours, respecting longer X retry/reset headers. A durable lease prevents overlapping polling. Browser and scheduler requests share token rotation; transient failures preserve the connection. Reading cached activity does not trigger a poll.
 
 Connecting X enables background import in this deployment. Disconnect stops future polls; an already running request may finish. Deleting local data removes observations and sync state along with the existing graph, waiting for an active background import so it cannot recreate deleted bookmarks. Grok enrichment, scouting, and following import remain separate explicit actions. Polling incurs X API reads even without an open browser.
 
@@ -26,7 +28,7 @@ From an allowed, untagged tailnet device:
 
 ```bash
 curl --fail --silent --show-error \
-  'https://minimus-mac-mini.tailcba5f3.ts.net/api/activity?after=0&limit=100'
+  'https://<host>.<tailnet>.ts.net/api/activity?after=0&limit=100'
 ```
 
 Process `events`, commit your processing result, then persist `nextCursor`. Fetch again with `after=<nextCursor>` until `hasMore` is false. Resume from that cursor on later runs. Use `sequence` as an idempotency key within this database. Replacing/deleting the database resets the feed; consumers must reset their cursor too.
@@ -49,7 +51,7 @@ For one Mac, Keychain is the simpler store. The optional `lib/local-credentials.
 
 Provision these yourself; do not paste values into chat, commands, or plists. Missing/locked items leave the app unconfigured. A first access may need macOS approval. After provisioning, the operator sets `credentialSource` to `keychain` in the **non-secret** `.tailnet/service.json` and reloads the LaunchAgent. Values go directly into the application process environment, never command arguments or logs. The loader never opens `.env.local`.
 
-The OAuth callback is derived from `publicOrigin`. Register exactly `https://minimus-mac-mini.tailcba5f3.ts.net/api/auth/x/callback` in the X app, then open Stimgraph and connect X with the existing read scopes and `offline.access`. Live sync cannot be verified until credentials and OAuth are completed.
+The OAuth callback is derived from `publicOrigin`. Register exactly `https://<host>.<tailnet>.ts.net/api/auth/x/callback` in the X app, then open Stimgraph and connect X with the existing read scopes and `offline.access`. Live sync cannot be verified until credentials and OAuth are completed.
 
 **Keychain under the same login is not strong isolation from local coding agents.** Allowing a generic program such as `/usr/bin/security` to retrieve an item does not restrict it to this app. An agent able to change service code can also change what that code does with credentials on restart.
 
@@ -70,7 +72,7 @@ corepack pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
 NEXT_TELEMETRY_DISABLED=1 STIMGRAPH_BACKGROUND_POLL=false \
   X_CLIENT_ID=stimgraph-inert-test X_CLIENT_SECRET=stimgraph-inert-test-secret \
   X_REDIRECT_URI=http://127.0.0.1:3012/api/auth/x/callback XAI_API_KEY= \
-  NEXT_PUBLIC_SITE_URL=https://minimus-mac-mini.tailcba5f3.ts.net \
+  NEXT_PUBLIC_SITE_URL=https://<host>.<tailnet>.ts.net \
   corepack pnpm@10.17.1 run build:local
 ```
 

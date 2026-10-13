@@ -94,7 +94,7 @@
     "bridges": "Routes supported by shared bookmarks between concepts. Optional Grok interprets a supplied route; unverified directions stay separate.",
     "research": "Choose 2–8 bookmarks, a lens, and save-intent annotations. Write manually or explicitly ask Grok with up to 8 redacted 800-character excerpts; source quotations are checked. Cards keep questions, methods, assumptions, counterexamples, and a smallest investigation. Save private versions or export.",
     "nearby_work": "Explicit Crossref search sends only a reviewed query. Records up to five metadata results and the query time; it is not a full literature review or novelty claim.",
-    "identity": "Prototype uses the connected X account as owner. Separate email app identity remains planned; see LAUNCH.md."
+    "identity": "Prototype uses the connected X account as owner. Separate email app identity remains planned; see docs/LAUNCH.md."
   },
   "share_format": {
     "file": ".stimgraph JSON",
@@ -152,8 +152,8 @@
     "bridges": "app/concept-bridges.tsx",
     "research": "app/research-bench.tsx",
     "research_api": "app/api/research/route.ts",
-    "mission": "PRODUCT.md",
-    "handoff": "HANDOFF.md"
+    "mission": "docs/PRODUCT.md",
+    "handoff": "docs/HANDOFF.md"
   },
   "beats": [
     {
