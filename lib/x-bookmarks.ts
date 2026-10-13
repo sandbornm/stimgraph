@@ -1,4 +1,5 @@
 import type { StoredBookmark } from '@/db/storage';
+import { XRequestError, retryTime } from './x-errors';
 
 type XPost = {
   id: string;
@@ -32,6 +33,7 @@ export type BookmarkPage = {
   page: number;
   fetched: number;
   hasMore: boolean;
+  nextToken?: string;
 };
 
 function mapPosts(payload: XBookmarksResponse): StoredBookmark[] {
@@ -58,18 +60,22 @@ export async function* iterateXBookmarks({
   accessToken,
   userId,
   limit,
+  startToken,
+  pageSize = 100,
 }: {
   accessToken: string;
   userId: string;
   limit: number;
+  startToken?: string;
+  pageSize?: number;
 }): AsyncGenerator<BookmarkPage> {
-  let paginationToken: string | undefined;
+  let paginationToken: string | undefined = startToken;
   let fetched = 0;
   let page = 0;
 
   while (fetched < limit) {
     const url = new URL(`https://api.x.com/2/users/${userId}/bookmarks`);
-    url.searchParams.set('max_results', String(Math.min(100, limit - fetched)));
+    url.searchParams.set('max_results', String(Math.max(1, Math.min(100, pageSize, limit - fetched))));
     url.searchParams.set('tweet.fields', 'id,text,author_id,created_at,lang,entities,public_metrics');
     url.searchParams.set('expansions', 'author_id');
     url.searchParams.set('user.fields', 'id,name,username,profile_image_url');
@@ -78,9 +84,10 @@ export async function* iterateXBookmarks({
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: 'no-store',
+      signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
-      throw new Error(`X bookmark sync failed with status ${response.status}`);
+      throw new XRequestError(response.status, retryTime(response));
     }
 
     const payload = (await response.json()) as XBookmarksResponse;
@@ -92,7 +99,8 @@ export async function* iterateXBookmarks({
       bookmarks,
       page,
       fetched,
-      hasMore: Boolean(paginationToken) && fetched < limit,
+      hasMore: Boolean(paginationToken),
+      nextToken: paginationToken,
     };
     if (!paginationToken || bookmarks.length === 0) break;
   }

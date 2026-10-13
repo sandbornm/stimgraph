@@ -8,6 +8,8 @@ import {
   X_SESSION_TTL_MS,
 } from '@/db/storage';
 import { refreshXSession } from './x-api';
+import { XRequestError } from './x-errors';
+import { requestOrigin } from './request-origin';
 import { openXSession, randomBase64Url, sealXSession, X_SESSION_COOKIE, type XSession } from './x-session';
 
 const SESSION_MAX_AGE_SECONDS = Math.floor(X_SESSION_TTL_MS / 1000);
@@ -16,7 +18,7 @@ export function sessionCookieOptions(request: NextRequest) {
   return {
     httpOnly: true,
     sameSite: 'lax' as const,
-    secure: new URL(request.url).protocol === 'https:',
+    secure: requestOrigin(request).startsWith('https:'),
     path: '/',
     maxAge: SESSION_MAX_AGE_SECONDS,
   };
@@ -51,10 +53,33 @@ async function refreshStoredSession(session: XSession, sessionId?: string) {
     const refreshed = await refreshXSession(session);
     const id = await persistSession(refreshed, sessionId);
     return { session: refreshed, renewedCookie: id };
-  } catch {
-    if (sessionId) await deleteXSessionRecord(sessionId);
-    return null;
+  } catch (error) {
+    if (error instanceof XRequestError && error.revoked) {
+      if (sessionId) await deleteXSessionRecord(sessionId);
+      return null;
+    }
+    // Network errors and rate limits must not destroy the offline connection.
+    throw error;
   }
+}
+
+// A browser refresh and a scheduled poll must not rotate the same refresh token
+// concurrently. The local service runs exactly one worker process.
+const refreshing = new Map<string, Promise<{ session: XSession; renewedCookie?: string } | null>>();
+
+export async function getStoredXSession(id: string) {
+  const inFlight = refreshing.get(id);
+  if (inFlight) return inFlight;
+  const operation = (async () => {
+    const stored = await loadXSessionRecord(id);
+    if (!stored) return null;
+    const session = await openXSession(stored.payload);
+    if (!session) return null;
+    if (session.expiresAt > Date.now() + 60_000) return { session };
+    return refreshStoredSession(session, id);
+  })();
+  refreshing.set(id, operation);
+  try { return await operation; } finally { refreshing.delete(id); }
 }
 
 export async function getActiveXSession(request: NextRequest): Promise<{
@@ -73,13 +98,5 @@ export async function getActiveXSession(request: NextRequest): Promise<{
     return refreshStoredSession(session);
   }
 
-  const stored = await loadXSessionRecord(cookie);
-  if (!stored) return null;
-  const session = await openXSession(stored.payload);
-  if (!session) {
-    await deleteXSessionRecord(cookie);
-    return null;
-  }
-  if (session.expiresAt > Date.now() + 60_000) return { session };
-  return refreshStoredSession(session, cookie);
+  return getStoredXSession(cookie);
 }

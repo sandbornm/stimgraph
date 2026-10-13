@@ -1,4 +1,6 @@
 import { getD1 } from './index';
+import { ACTIVITY_SCHEMA } from './activity';
+import { withOwnerWork } from '@/lib/owner-work';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
 import { hostFromUrl, urlsFromBookmark } from '@/lib/rss-probe';
@@ -52,6 +54,7 @@ export async function ensureSchema() {
   if (initialized) return;
   const d1 = getD1();
   await d1.batch([
+    ...ACTIVITY_SCHEMA.map((sql) => d1.prepare(sql)),
     d1.prepare(`CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY NOT NULL,
       username TEXT NOT NULL,
@@ -226,15 +229,9 @@ export async function replaceXSessionRecord(id: string, ownerId: string, payload
 export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
   await ensureSchema();
   const now = Date.now();
-  await getD1().prepare(
-    `INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       payload = excluded.payload,
-       expires_at = excluded.expires_at,
-       updated_at = excluded.updated_at,
-       owner_id = excluded.owner_id`,
-  ).bind(id, ownerId, payload, expiresAt, now, now).run();
+  // Do not resurrect a session that was disconnected while a refresh was running.
+  await getD1().prepare(`UPDATE x_sessions SET payload = ?, expires_at = ?, updated_at = ?
+    WHERE id = ? AND owner_id = ?`).bind(payload, expiresAt, now, id, ownerId).run();
 }
 
 export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
@@ -304,6 +301,7 @@ export async function storeBookmarks({
         updated_at = excluded.updated_at`)
       .bind(owner.id, owner.username, owner.name, owner.profileImageUrl ?? null, now, now),
   ];
+  const batchEnds: number[] = [];
 
   for (const bookmark of bookmarks) {
     statements.push(
@@ -339,6 +337,12 @@ export async function storeBookmarks({
         ),
     );
 
+    // The timestamp is when this app first saw the bookmark, never the post date.
+    // Unique ownership/post keys make repeats and concurrent imports idempotent.
+    statements.push(d1.prepare(`INSERT OR IGNORE INTO bookmark_observations
+      (owner_id, post_id, observed_at) VALUES (?, ?, ?)`)
+      .bind(owner.id, bookmark.postId, now));
+
     for (const hashtag of bookmark.hashtags) {
       const id = topicId(hashtag);
       if (!id) continue;
@@ -353,11 +357,16 @@ export async function storeBookmarks({
           .bind(owner.id, bookmark.postId, id, `#${hashtag}`),
       );
     }
+    batchEnds.push(statements.length);
   }
 
-  for (let index = 0; index < statements.length; index += 80) {
-    await d1.batch(statements.slice(index, index + 80));
+  let batchStart = 0;
+  for (const end of batchEnds) {
+    if (end - batchStart < 80) continue;
+    await d1.batch(statements.slice(batchStart, end));
+    batchStart = end;
   }
+  if (batchStart < statements.length) await d1.batch(statements.slice(batchStart));
   if (optimize) await d1.prepare('PRAGMA optimize').run();
   return { stored: bookmarks.length, inserted: insertedIds.length, insertedIds };
 }
@@ -784,23 +793,27 @@ export async function loadFeeds(ownerId: string): Promise<FeedProbe[]> {
 }
 
 export async function deleteOwnerData(ownerId: string) {
-  await ensureSchema();
-  const d1 = getD1();
-  await d1.batch([
-    d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM trajectories WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM bridge_requests WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM research_cards WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM research_requests WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
-    d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
-  ]);
+  return withOwnerWork(ownerId, async () => {
+    await ensureSchema();
+    const d1 = getD1();
+    await d1.batch([
+      d1.prepare('DELETE FROM bookmark_observations WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM bookmark_sync_state WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM trajectories WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM bridge_requests WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM research_cards WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM research_requests WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
+    ]);
+  });
 }
 
 export async function saveShare(id: string, ownerId: string, capsule: GraphCapsule) {
