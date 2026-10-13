@@ -4,7 +4,7 @@
 
 > **Disclaimer.** Not affiliated with, endorsed by, or sponsored by X Corp. X is a trademark of X Corp. Users must supply their own X API credentials and comply with the [X Developer Agreement and Policy](https://developer.x.com/en/developer-terms/agreement-and-policy).
 
-> **License: TODO.** No license has been chosen yet. Until one is added, all rights are reserved and this repository is private.
+> **License:** [MIT](LICENSE). Copyright (c) 2026 Michael Sandborn.
 
 Detailed feature behavior lives in [docs/FEATURES.md](docs/FEATURES.md). Operating the always-on Mac service: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Product direction and history: [docs/PRODUCT.md](docs/PRODUCT.md), [docs/LAUNCH.md](docs/LAUNCH.md), [docs/HANDOFF.md](docs/HANDOFF.md). Rules for coding agents: [AGENTS.md](AGENTS.md).
 
@@ -104,7 +104,22 @@ The app exposes separate controls to disconnect the browser session or delete th
 
 ## Agent access (read-only)
 
-Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. No MCP server or install is needed.
+Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. No MCP server or install is needed; any agent that can fetch a URL on your tailnet can use it.
+
+### How this fits with agents that already read X
+
+Assistants such as Grok Bot can already reach X in two ways (as of October 2026; check the assistant's own docs for current details):
+
+- **Built-in public reads** of posts, users, and search. These do not act as you, so they cannot see your bookmarks.
+- **An optional X plugin** that signs in as you and can read things like bookmarks, DMs, and your timeline, but cannot post.
+
+Stimgraph does not replace either. It is a **local, persistent store** of your bookmarks with topics and a read-only agent link:
+
+- Queries against Stimgraph are free and instant; they do not spend X API calls each time an agent asks a question.
+- It keeps history between sessions and adds structure (topics, people, trajectories) that a live X read does not.
+- Stimgraph itself imports through **your own X developer app** (your credentials, your API costs), on your schedule, and never posts.
+
+A reasonable pattern: use the assistant's X access for live or public lookups, and point it at Stimgraph for "what have I saved about…" questions.
 
 ## Checks
 

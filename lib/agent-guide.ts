@@ -17,6 +17,12 @@ Read-only access to one person's saved X bookmarks, with topics. Tailnet only.
 Requests must arrive through the Tailscale Serve URL (tailnet identity) or a browser
 with the Stimgraph session. No writes, no tokens, no secrets are exposed.
 
+## When to use this vs. live X access
+This is a local, persistent copy of the owner's bookmarks with topics. Querying it is free
+and does not call the X API. Prefer it for "what have I saved about..." questions. Use your
+own X access (public reads, or a signed-in X plugin if you have one) for live or public
+lookups. Stimgraph imports with the owner's own X developer app and never posts.
+
 ## Tips
 Start with /api/agent/topics, then filter bookmarks by topic. Topics prefixed "kw-"
 are keyword clusters for posts that have no AI/hashtag topic yet.
