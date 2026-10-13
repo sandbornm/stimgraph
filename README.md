@@ -95,3 +95,10 @@ pnpm run build
 ```
 
 Agent verification must run in an isolated source copy without local environment files, using inert values passed directly to the process. See [HANDOFF.md](HANDOFF.md) for the current state and remaining launch work.
+
+## Agent access (read-only, tailnet)
+
+Point an agent at `https://<your-host>.ts.net/agents` (or `/llms.txt`). JSON endpoints:
+`/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`.
+Access requires the browser session or a Tailscale Serve request (`Tailscale-User-Login` + `*.ts.net` host).
+Optional: `STIMGRAPH_AGENT_LOGINS=a@x.com,b@y.com` allowlist; `STIMGRAPH_AGENT_API=off` disables tailnet access.

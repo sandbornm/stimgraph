@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import {
   SELF_NODE_ID,
@@ -13,8 +13,10 @@ import {
   type GraphEdge,
 } from '@/lib/graph-model';
 import { readNdjson } from '@/lib/read-ndjson';
-import { ExploreGraph } from './explore-graph';
-import { TrajectoryWorkbench } from './trajectory-workbench';
+import { BookmarkTable } from './bookmark-table';
+// Heavier visualizers load on demand so the default table view paints fast.
+const ExploreGraph = lazy(() => import('./explore-graph').then((m) => ({ default: m.ExploreGraph })));
+const TrajectoryWorkbench = lazy(() => import('./trajectory-workbench').then((m) => ({ default: m.TrajectoryWorkbench })));
 import { buildExploreIndex, connectionReason, exploreConnections, pruneExploreTrail, visitExploreTrail, type ExploreOrientation, type ExploreTrail } from '@/lib/explore-model';
 import type { FeedProbe } from '@/lib/rss-probe';
 
@@ -1440,7 +1442,7 @@ type GraphResponse = {
   scope?: 'overview' | 'wide';
 };
 
-type ViewMode = 'explore' | 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend' | 'feeds';
+type ViewMode = 'table' | 'explore' | 'map' | 'people' | 'threads' | 'bookmarks' | 'scout' | 'neighborhood' | 'blend' | 'feeds';
 
 type TraceKind = 'boot' | 'sync' | 'map' | 'live' | 'enrich' | 'scout' | 'rss' | 'note';
 
@@ -1497,7 +1499,7 @@ export default function Home() {
   const [shareUrl, setShareUrl] = useState('');
   const [incomingShare, setIncomingShare] = useState<GraphCapsule | null>(null);
   const [sharePath, setSharePath] = useState('');
-  const [view, setView] = useState<ViewMode>('explore');
+  const [view, setView] = useState<ViewMode>('table');
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [syncMessage, setSyncMessage] = useState('');
   const [pulling, setPulling] = useState(false);
@@ -1629,7 +1631,7 @@ export default function Home() {
   const relatedIdeas = selectedConnections.filter(({ neighbor }) => neighbor.kind !== 'source').slice(0, 5);
   const previousConnection = selectedConnections.find(({ neighbor }) => neighbor.id === activeExploreTrail.steps[activeExploreTrail.cursor - 1]);
   const globeBusy = activity?.kind === 'sync' || activity?.kind === 'scout' || activity?.kind === 'enrich' || activity?.kind === 'rss';
-  const showInspector = view === 'explore'
+  const showInspector = view === 'explore' || view === 'table'
     ? permissionsOpen || (Boolean(selected) && exploreDetailsOpen)
     : Boolean(selected) || view !== 'map' || permissionsOpen;
   useEffect(() => {
@@ -1679,7 +1681,7 @@ export default function Home() {
     setFieldScope(data.scope ?? scope);
     setMode('live');
     if (!options?.keepView) {
-      setView('explore');
+      setView((current) => current === 'table' ? 'table' : 'explore');
       setSeedGraph(null);
       setNeighborhoodRootId(null);
     }
@@ -2764,11 +2766,14 @@ export default function Home() {
       <section className="workspace">
         <aside className="left-rail" aria-label="Graph navigation">
           <nav>
+            <button className={`rail-item ${view === 'table' ? 'active' : ''}`} type="button" onClick={() => enterView('table')}><span>☰</span>Bookmarks</button>
             <button className={`rail-item ${view === 'explore' ? 'active' : ''}`} type="button" onClick={() => enterView('explore')}><span>✧</span>Explore</button>
             <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>◎</span>Globe</button>
             <button className={`rail-item ${view === 'people' ? 'active' : ''}`} type="button" onClick={() => enterView('people')}><span>◎</span>People</button>
             <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Topics</button>
-            <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Bookmarks</button>
+            <details className="rail-more">
+            <summary className="rail-item"><span>⋯</span>More</summary>
+            <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Saved posts</button>
             <button className={`rail-item ${view === 'scout' ? 'active' : ''}`} type="button" onClick={() => enterView('scout')}><span>⬡</span>Scout</button>
             <button className={`rail-item ${view === 'feeds' ? 'active' : ''}`} type="button" onClick={() => enterView('feeds')}><span>⇉</span>Feeds</button>
             <button className={`rail-item ${view === 'neighborhood' ? 'active' : ''}`} type="button" onClick={seedNeighborhood}><span>⊙</span>Neighborhood</button>
@@ -2776,6 +2781,7 @@ export default function Home() {
             <button className={`rail-item ${tuningOpen ? 'active' : ''}`} type="button" onClick={() => { setTuningOpen((open) => !open); flyTo(graphNodes.map((node) => node.id)); }}><span>◌</span>Tune</button>
             <button className={`rail-item ${guideIndex >= 0 ? 'active' : ''}`} type="button" onClick={() => runGuide(1)}><span>◐</span>Guide</button>
             <button className="rail-item" type="button" onClick={() => { setGuideIndex(-1); rediscover(); }}><span>◷</span>Rediscover</button>
+            </details>
           </nav>
 
           <div className="rail-summary">
@@ -2796,12 +2802,12 @@ export default function Home() {
         </aside>
 
         <div className={`graph-stage palette-${tuning.palette} ${view === 'explore' ? 'explore-stage' : ''}`}>
-          <div className={`stage-heading ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides || view === 'explore'}>
+          <div className={`stage-heading ${tuning.guides && view !== 'explore' && view !== 'table' ? '' : 'guide-hidden'}`} aria-hidden={!tuning.guides || view === 'explore' || view === 'table'}>
             <p className="eyebrow">{stageCopy.eyebrow}</p>
             <h1>{stageCopy.title}</h1>
             <p>{stageCopy.detail}</p>
           </div>
-          <div className={`field-readout ${activity ? 'busy' : ''} ${view === 'explore' && !activity ? 'guide-hidden' : ''}`} aria-live="polite">
+          <div className={`field-readout ${activity ? 'busy' : ''} ${(view === 'explore' || view === 'table') && !activity ? 'guide-hidden' : ''}`} aria-live="polite">
             {activity ? (
               <>
                 <span>{activity.label}{activity.current != null ? `  ${activity.current}/${activity.total}` : ''}</span>
@@ -2821,7 +2827,8 @@ export default function Home() {
               : undefined}
             />
           </div>
-          <TrajectoryWorkbench
+          <Suspense fallback={null}>
+          {view !== 'table' ? <TrajectoryWorkbench
             key={`${mode}:${connection.profile?.id ?? shareName ?? 'demo'}`}
             nodes={graphNodes} edges={graphEdges} trail={activeExploreTrail} visited={exploreVisited}
             mode={mode} hidden={view !== 'explore'}
@@ -2833,8 +2840,8 @@ export default function Home() {
               setPermissionsOpen(false);
               setGuideIndex(-1);
             }}
-          />
-          {view === 'explore' ? <ExploreGraph
+          /> : null}
+          {view === 'table' ? <BookmarkTable live={mode === 'live'} refreshKey={totals.bookmark_count} nodes={graphNodes} edges={graphEdges} /> : view === 'explore' ? <ExploreGraph
             orientation={exploreOrientation} onOrientationChange={setExploreOrientation}
             nodes={graphNodes} edges={graphEdges} selectedId={selectedId} trail={activeExploreTrail} visited={exploreVisited} mode={mode} theme={theme}
             shortcutsBlocked={paletteOpen || helpOpen || tuningOpen || showInspector}
@@ -2851,7 +2858,8 @@ export default function Home() {
             onSearch={() => { setPaletteIndex(0); setPaletteOpen(true); }}
             onScout={() => enterView('scout')}
           /> : <GraphCanvas nodes={renderedNodes} edges={renderedEdges} selectedId={selectedId} searchNeedleRef={searchNeedleRef} tuning={viewTuning} freshIds={freshIds} busy={globeBusy} frameToken={frameToken} frameIds={frameIds} onSelect={handleSelect} />}
-          <div className={`legend ${tuning.guides && view !== 'explore' ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides || view === 'explore'}>
+          </Suspense>
+          <div className={`legend ${tuning.guides && view !== 'explore' && view !== 'table' ? '' : 'guide-hidden'}`} aria-label="Graph legend" aria-hidden={!tuning.guides || view === 'explore' || view === 'table'}>
             {view === 'blend' && seedGraph ? (
               <>
                 <span><i className="local-dot" />Yours</span>
@@ -2979,7 +2987,7 @@ export default function Home() {
               {capsuleMessage ? <p className="capsule-message">{capsuleMessage}</p> : null}
               {shareUrl ? <a className="node-link" href={shareUrl}>{shareUrl.replace(/^https?:\/\//, '')}</a> : null}
             </>
-          ) : view !== 'map' && view !== 'explore' ? (
+          ) : view !== 'map' && view !== 'explore' && view !== 'table' ? (
             <div className="view-panel">
               <p className="eyebrow">{view === 'people' ? 'PEOPLE' : view === 'threads' ? 'TOPICS' : view === 'bookmarks' ? 'BOOKMARKS' : view === 'scout' ? 'GROK SCOUT' : view === 'neighborhood' ? 'NEIGHBORHOOD' : view === 'feeds' ? 'RSS' : 'COMBINED MAP'}</p>
               <h2>{view === 'people' ? 'Authors and accounts you follow.' : view === 'threads' ? 'Topics.' : view === 'bookmarks' ? 'Saved posts.' : view === 'scout' ? 'Suggested posts.' : view === 'neighborhood' ? 'This neighborhood.' : view === 'feeds' ? 'Linked sites and feeds.' : seedGraph ? `Yours and ${seedGraph.name}` : 'Combine two graphs.'}</h2>
