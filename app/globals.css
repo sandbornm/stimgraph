@@ -1231,7 +1231,8 @@ html[data-theme='light'] .trajectory { --path: #356d60; }
 .bm-chip { display: inline-flex; gap: 5px; align-items: center; padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; font-size: 12px; cursor: pointer; line-height: 1.6; }
 .bm-chip small { opacity: .55; }
 .bm-chip:hover { border-color: currentColor; }
-.bm-chip.on { background: currentColor; }
+/* Explicit colors: `background: currentColor` resolved to the already-swapped text color, hiding active chips. */
+.bm-chip.on { background: var(--fg, #f2f2f0); border-color: var(--fg, #f2f2f0); }
 .bm-chip.on, .bm-chip.on small { color: var(--bg, #0b0b0b); }
 .bm-scroll { flex: 1; overflow: auto; contain: content; }
 .bm-table table { width: 100%; border-collapse: collapse; font-size: 13px; }

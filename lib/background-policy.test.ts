@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { activityQuery, pollDelay, trustedTailnetLogin } from './background-policy.ts';
+import { BACKFILL_LIMIT, activityQuery, nextPageStep, pollDelay, trustedTailnetLogin } from './background-policy.ts';
 import { retryTime } from './x-errors.ts';
 
 test('polling backs off, caps exponential retries, and honors longer server delays', () => {
@@ -24,4 +24,22 @@ test('tailnet access requires the exact explicitly configured identity', () => {
   assert.equal(trustedTailnetLogin(new Headers(), 'owner@example.invalid'), false);
   assert.equal(trustedTailnetLogin(new Headers({ 'Tailscale-User-Login': 'other@example.invalid' }), 'owner@example.invalid'), false);
   assert.equal(trustedTailnetLogin(new Headers({ 'Tailscale-User-Login': 'owner@example.invalid' }), 'owner@example.invalid'), true);
+});
+
+test('regular polls stop at overlap; backfill pages past it', () => {
+  assert.deepEqual(nextPageStep({ backfill: false, inserted: 5, received: 20, nextToken: 't', fetched: 20 }),
+    { continuation: null, stop: true, backfillDone: false });
+  assert.deepEqual(nextPageStep({ backfill: false, inserted: 20, received: 20, nextToken: 't', fetched: 20 }),
+    { continuation: 't', stop: false, backfillDone: false });
+  assert.deepEqual(nextPageStep({ backfill: true, inserted: 0, received: 100, nextToken: 't', fetched: 100 }),
+    { continuation: 't', stop: false, backfillDone: false });
+});
+
+test('backfill completes when X runs out of pages or the limit is reached', () => {
+  assert.deepEqual(nextPageStep({ backfill: true, inserted: 3, received: 40, nextToken: undefined, fetched: 340 }),
+    { continuation: null, stop: true, backfillDone: true });
+  assert.deepEqual(nextPageStep({ backfill: true, inserted: 0, received: 100, nextToken: 't', fetched: BACKFILL_LIMIT }),
+    { continuation: null, stop: true, backfillDone: true });
+  assert.deepEqual(nextPageStep({ backfill: true, inserted: 0, received: 0, nextToken: 't', fetched: 100 }),
+    { continuation: null, stop: true, backfillDone: true });
 });

@@ -185,6 +185,12 @@ export async function ensureSchema() {
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_x_sessions_owner ON x_sessions(owner_id)'),
   ]);
+  // Additive column for the one-time bookmark backfill; ignore if it already exists.
+  try {
+    await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
+  } catch (error) {
+    if (!/duplicate column/i.test(String(error))) throw error;
+  }
   initialized = true;
 }
 

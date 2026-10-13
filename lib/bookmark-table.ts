@@ -15,14 +15,14 @@ export type TableRow = {
 
 export type TopicCount = TableTopic & { count: number };
 
-const STOPWORDS = new Set(('a an and are as at be but by for from has have how i if in into is it its just like more my new no not of on or our out so than that the their them then there these they this to up us was we what when which who why will with you your about after all also any can do does get got here im it’s just make most much now one only over really should some still thing think very via way would rt amp https http co').split(' '));
+const STOPWORDS = new Set(('a an and are as at be but by for from has have how i if in into is it its just like more my new no not of on or our out so than that the their them then there these they this to up us was we what when which who why will with you your about after all also any can do does get got here im it’s just make most much now one only over really should some still thing think very via way would rt amp https http co been being were had did done going want need even every other first back see good great people person time times today day days week year years work post posts know thanks thank lol yes yeah right well many much less lot lots something anything everything things look looks big little best better because where while before since through again never always maybe ever own same each both few those let use used using said says say tell made makes making take come gonna dont doesnt cant isnt youre thats theres heres whats').split(' '));
 
 export function slugTopic(label: string) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 }
 
 /** Simple keyword clustering fallback for rows that have no stored topics. */
-export function keywordTopics(rows: TableRow[], maxTopics = 12, minCount = 2): TableRow[] {
+export function keywordTopics(rows: TableRow[], maxTopics = 12, minCount = 3): TableRow[] {
   const untagged = rows.filter((row) => row.topics.length === 0);
   if (untagged.length === 0) return rows;
   const tokensByRow = new Map<string, Set<string>>();
@@ -31,7 +31,7 @@ export function keywordTopics(rows: TableRow[], maxTopics = 12, minCount = 2): T
     const tokens = new Set(
       row.text.toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/[@][\w_]+/g, ' ')
         .match(/#?[a-z][a-z0-9+.-]{2,}/g)?.map((t) => t.replace(/^#/, '').replace(/[.-]+$/, ''))
-        .filter((t) => t.length > 2 && !STOPWORDS.has(t)) ?? [],
+        .map((t) => t.replace(/['’]/g, '')).filter((t) => t.length > 2 && !STOPWORDS.has(t) && !/^\d/.test(t)) ?? [],
     );
     tokensByRow.set(row.id, tokens);
     for (const token of tokens) counts.set(token, (counts.get(token) ?? 0) + 1);

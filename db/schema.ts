@@ -205,6 +205,7 @@ export const bookmarkSyncState = sqliteTable('bookmark_sync_state', {
   status: text('status').notNull().default('waiting'),
   fetched: integer('fetched').notNull().default(0),
   continuation: text('continuation'),
+  backfillCompletedAt: integer('backfill_completed_at'),
 });
 
 export const backgroundHealth = sqliteTable('background_health', {
