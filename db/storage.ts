@@ -855,3 +855,39 @@ export async function loadShare(id: string): Promise<{ id: string; ownerId: stri
   if (!capsule) return null;
   return { id: row.id, ownerId: row.owner_id, capsule, createdAt: row.created_at };
 }
+
+export type BookmarkTableData = {
+  bookmarks: Array<{ post_id: string; author_username: string; author_name: string; text: string; created_at: string | null }>;
+  topics: Array<{ post_id: string; topic_id: string; label: string }>;
+  total: number;
+};
+
+/** Read-only flat bookmark list with topic labels for the table and agent API. */
+export async function loadBookmarkTable(ownerId: string, limit = 2000): Promise<BookmarkTableData> {
+  await ensureSchema();
+  const d1 = getD1();
+  const [bookmarkRows, topicRows, totals] = await d1.batch([
+    d1.prepare(`SELECT post_id, author_username, author_name, text, created_at
+      FROM bookmarks WHERE owner_id = ?
+      ORDER BY created_at DESC, synced_at DESC LIMIT ?`).bind(ownerId, limit),
+    d1.prepare(`SELECT bt.post_id, bt.topic_id, t.label
+      FROM bookmark_topics bt
+      JOIN topics t ON t.owner_id = bt.owner_id AND t.id = bt.topic_id
+      WHERE bt.owner_id = ?
+      ORDER BY bt.confidence DESC`).bind(ownerId),
+    d1.prepare('SELECT COUNT(*) AS n FROM bookmarks WHERE owner_id = ?').bind(ownerId),
+  ]);
+  return {
+    bookmarks: bookmarkRows.results as unknown as BookmarkTableData['bookmarks'],
+    topics: topicRows.results as unknown as BookmarkTableData['topics'],
+    total: Number((totals.results[0] as { n?: number } | undefined)?.n ?? 0),
+  };
+}
+
+/** The single connected account, used for tailnet agent reads when no browser cookie is present. */
+export async function loadSoleAccountId(): Promise<string | null> {
+  await ensureSchema();
+  const result = await getD1().prepare('SELECT id FROM accounts ORDER BY updated_at DESC LIMIT 2').all();
+  const rows = result.results as Array<{ id: string }>;
+  return rows.length === 1 ? rows[0].id : null;
+}
