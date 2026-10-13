@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { requestOrigin } from '@/lib/request-origin';
 import { NextResponse } from 'next/server';
 import { deleteResearchCard, loadResearchCards, loadResearchSources, reserveResearchRequest, saveResearchCard } from '@/db/research';
 import { parseResearchDraft, researchLenses, saveIntents, type ResearchLens, type ResearchReach, type SaveIntent } from '@/lib/research-model';
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic';
 async function handle(request: NextRequest) {
   const reply = (data: unknown, status = 200) => NextResponse.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
   if (request.method !== 'GET' && (request.headers.get('sec-fetch-site') === 'cross-site'
-    || (request.headers.get('origin') && request.headers.get('origin') !== request.nextUrl.origin))) return reply({ error: 'Use the Research bench in Stimgraph.' }, 403);
+    || (request.headers.get('origin') && request.headers.get('origin') !== requestOrigin(request)))) return reply({ error: 'Use the Research bench in Stimgraph.' }, 403);
   const active = await getActiveXSession(request);
   if (!active) return reply({ error: 'Connect X to save research cards or use research services.' }, 401);
   const respond = (data: unknown, status = 200) => withRenewedSession(reply(data, status), request, active.renewedCookie);

@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { requestOrigin } from '@/lib/request-origin';
 import { NextResponse } from 'next/server';
 import { deleteTrajectory, loadTrajectories, saveTrajectory } from '@/db/trajectories';
 import { parseTrajectoryDraft } from '@/lib/trajectory-model';
@@ -10,7 +11,7 @@ async function handle(request: NextRequest) {
   const headers = { 'Cache-Control': 'private, no-store' };
   const reply = (data: unknown, status = 200) => NextResponse.json(data, { status, headers });
   if (request.method !== 'GET' && (request.headers.get('sec-fetch-site') === 'cross-site'
-    || (request.headers.get('origin') && request.headers.get('origin') !== request.nextUrl.origin))) {
+    || (request.headers.get('origin') && request.headers.get('origin') !== requestOrigin(request)))) {
     return reply({ error: 'Use the trajectory controls in Stimgraph.' }, 403);
   }
   const active = await getActiveXSession(request);

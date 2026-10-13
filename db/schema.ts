@@ -1,4 +1,5 @@
-import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 export const accounts = sqliteTable('accounts', {
   id: text('id').primaryKey(),
@@ -183,3 +184,30 @@ export const xSessions = sqliteTable(
   },
   (table) => [index('idx_x_sessions_owner').on(table.ownerId)],
 );
+
+export const bookmarkObservations = sqliteTable('bookmark_observations', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  ownerId: text('owner_id').notNull(),
+  postId: text('post_id').notNull(),
+  observedAt: integer('observed_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_observations_owner_post').on(table.ownerId, table.postId),
+  index('idx_observations_owner_sequence').on(table.ownerId, table.sequence),
+]);
+
+export const bookmarkSyncState = sqliteTable('bookmark_sync_state', {
+  ownerId: text('owner_id').primaryKey(),
+  nextPollAt: integer('next_poll_at').notNull().default(0),
+  leaseUntil: integer('lease_until').notNull().default(0),
+  failures: integer('failures').notNull().default(0),
+  lastStartedAt: integer('last_started_at'),
+  lastSucceededAt: integer('last_succeeded_at'),
+  status: text('status').notNull().default('waiting'),
+  fetched: integer('fetched').notNull().default(0),
+  continuation: text('continuation'),
+});
+
+export const backgroundHealth = sqliteTable('background_health', {
+  id: integer('id').primaryKey(),
+  heartbeatAt: integer('heartbeat_at').notNull(),
+}, (table) => [check('background_health_singleton', sql`${table.id} = 1`)]);

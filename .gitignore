@@ -11,7 +11,7 @@ dist/
 .open-next/
 
 # Local data
-data/
+/data/
 *.db
 *.db-shm
 *.db-wal
@@ -21,4 +21,4 @@ data/
 .DS_Store
 tsconfig.tsbuildinfo
 .wrangler/
-
+.tailnet/

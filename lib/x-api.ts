@@ -1,5 +1,6 @@
 import { requireRuntimeValue } from './runtime-env';
 import type { XProfile, XSession } from './x-session';
+import { XRequestError, retryTime } from './x-errors';
 
 const X_TOKEN_URL = 'https://api.x.com/2/oauth2/token';
 
@@ -26,10 +27,12 @@ async function requestToken(body: URLSearchParams): Promise<TokenResponse> {
     },
     body,
     cache: 'no-store',
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
-    throw new Error(`X token exchange failed with status ${response.status}`);
+    const detail = await response.json().catch(() => ({})) as { error?: string };
+    throw new XRequestError(response.status, retryTime(response), detail.error === 'invalid_grant');
   }
 
   return response.json() as Promise<TokenResponse>;

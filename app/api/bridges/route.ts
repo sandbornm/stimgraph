@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { requestOrigin } from '@/lib/request-origin';
 import { NextResponse } from 'next/server';
 import { loadBridgeIndex, reserveBridgeRequest } from '@/db/bridges';
 import { findConceptBridges } from '@/lib/bridge-model';
@@ -10,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const reply = (data: unknown, status = 200) => NextResponse.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
-  if (request.headers.get('sec-fetch-site') === 'cross-site' || (request.headers.get('origin') && request.headers.get('origin') !== request.nextUrl.origin)) return reply({ error: 'Use Ask Grok from Stimgraph.' }, 403);
+  if (request.headers.get('sec-fetch-site') === 'cross-site' || (request.headers.get('origin') && request.headers.get('origin') !== requestOrigin(request))) return reply({ error: 'Use Ask Grok from Stimgraph.' }, 403);
   const active = await getActiveXSession(request);
   if (!active) return reply({ error: 'Connect X to ask Grok about your collection.' }, 401);
   const respond = (data: unknown, status = 200) => withRenewedSession(reply(data, status), request, active.renewedCookie);

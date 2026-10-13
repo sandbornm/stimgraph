@@ -1429,6 +1429,7 @@ function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, time
 type ConnectionState = {
   connected: boolean;
   configured?: boolean;
+  backgroundPolling?: boolean;
   profile?: { id: string; username: string; name: string; profileImageUrl?: string };
 };
 
@@ -2141,7 +2142,7 @@ export default function Home() {
   }, [liveWatch, liveWatchReady]);
 
   useEffect(() => {
-    if (!liveWatch || mode !== 'live' || !connection.connected) return;
+    if (connection.backgroundPolling || !liveWatch || mode !== 'live' || !connection.connected) return;
     let cancelled = false;
     let timer = 0;
     let emptyStreak = 0;
@@ -2211,7 +2212,33 @@ export default function Home() {
       document.removeEventListener('visibilitychange', onVisible);
       setPulling(false);
     };
-  }, [connection.connected, liveWatch, loadLiveGraph, markFresh, mode]);
+  }, [connection.backgroundPolling, connection.connected, liveWatch, loadLiveGraph, markFresh, mode]);
+
+  useEffect(() => {
+    if (!connection.backgroundPolling || !connection.connected || mode === 'shared') return;
+    let cancelled = false;
+    let busy = false;
+    let latestCursor = -1;
+    const refresh = async () => {
+      if (cancelled || busy || document.hidden || syncingRef.current) return;
+      busy = true;
+      try {
+        const response = await fetch('/api/activity?limit=1', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) return;
+        const result = await response.json() as { latestCursor: number };
+        if (!cancelled && latestCursor !== result.latestCursor) {
+          await loadLiveGraph({ keepView: true });
+          latestCursor = result.latestCursor;
+        }
+      } catch {
+        // A temporary failure is retried without making a second X poller.
+      } finally { busy = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [connection.backgroundPolling, connection.connected, loadLiveGraph, mode]);
 
   useEffect(() => {
     if (!keepScouting || mode !== 'live' || !connection.connected) return;
@@ -3026,7 +3053,7 @@ export default function Home() {
               <p>{mode === 'shared'
                 ? 'People and topics only. Bookmark text is not in this link. Combine with the demo, or connect X and it will lay onto your map when you come back.'
                 : connection.connected
-                ? 'Sync pulls bookmarks and who you follow. Live watch of new saves is optional and off by default.'
+                ? (connection.backgroundPolling ? 'Bookmarks sync in the background every six hours, even with this tab closed. This map refreshes automatically.' : 'Sync pulls bookmarks and who you follow. Live watch of new saves is optional and off by default.')
                 : 'Read-only: bookmarks, following, posts, profiles. It cannot post, like, follow, or change bookmarks.'}</p>
               {connection.connected ? (
                 <button className="wide-connect" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
@@ -3041,7 +3068,7 @@ export default function Home() {
               )}
               {syncMessage ? <p className={`sync-message ${syncState}`}>{syncMessage}</p> : null}
               {syncMessage.includes('Reconnect X') ? <a className="node-link" href="/api/auth/x/start">Reconnect X to grant follows.read ↗</a> : null}
-              {connection.connected && mode === 'live' ? (
+              {connection.connected && mode === 'live' && !connection.backgroundPolling ? (
                 <button
                   className={`tuning-toggle ${liveWatch ? 'active' : ''}`}
                   type="button"

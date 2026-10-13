@@ -9,6 +9,8 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
+    "build:local": "next build --webpack",
+    "start:local": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "node --experimental-strip-types --test lib/*.test.ts",
     "db:generate": "drizzle-kit generate"
@@ -20,6 +22,7 @@
     "drizzle-orm": "0.45.2"
   },
   "devDependencies": {
+    "miniflare": "4.20260515.0",
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@openai/sites-vite-plugin": "^0.1.0 || ^0.2.0",

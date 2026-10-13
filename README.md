@@ -42,6 +42,8 @@ The Tune panel changes particle density, the minimum visible connection strength
 
 ## Local setup
 
+For continuous background polling, a resumable agent activity feed, and private Tailscale HTTPS, see [DEPLOYMENT.md](DEPLOYMENT.md). It uses a production Node server supervised by macOS and supports operator-provisioned Keychain credentials without reading repository environment files.
+
 Use Node 22.13 or newer and pnpm.
 
 1. In the [X Developer Console](https://console.x.com/), configure the app as a confidential **Web App, Automated App or Bot**.
@@ -77,7 +79,7 @@ Stimgraph requests these OAuth scopes:
 - `users.read` to identify authors.
 - `offline.access` to refresh the connection when the user requests a later sync.
 
-It does not request write scopes and cannot post, like, follow, or change bookmarks. Import never starts automatically. If you connected before following import existed, reconnect so X can grant `follows.read`. In the [X Developer Console](https://console.x.com/), add `follows.read` to the app’s user-authentication scopes.
+It does not request write scopes and cannot post, like, follow, or change bookmarks. Development import starts on request; the opt-in private deployment in [DEPLOYMENT.md](DEPLOYMENT.md) polls connected accounts in the background. If you connected before following import existed, reconnect so X can grant `follows.read`. In the [X Developer Console](https://console.x.com/), add `follows.read` to the app’s user-authentication scopes.
 
 Grok enrichment is a separate action. Pressing it sends the next 40 bookmark texts and author handles to xAI; it never sends the X access token. Grok scout sends only topic labels and frequent author handles, then searches X. Requests use `store: false`. xAI documents a default 30-day abuse-monitoring retention period unless the API team has Zero Data Retention enabled, and says API inputs and outputs are not used for training without explicit permission. See [xAI API security](https://docs.x.ai/developers/faq/security) and [current pricing](https://docs.x.ai/developers/pricing).
 

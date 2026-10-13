@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { replaceXSessionRecord, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
 import { sessionCookieOptions } from '@/lib/x-auth-server';
+import { requestOrigin } from '@/lib/request-origin';
 import { requireRuntimeValue } from '@/lib/runtime-env';
 import { exchangeAuthorizationCode, fetchXProfile } from '@/lib/x-api';
 import { randomBase64Url, sealXSession, X_SESSION_COOKIE, X_STATE_COOKIE } from '@/lib/x-session';
@@ -13,7 +14,7 @@ function sharePath(value: string | null | undefined) {
 }
 
 function homeRedirect(request: NextRequest, auth: string, returnPath?: string | null) {
-  return new URL(`${sharePath(returnPath)}?auth=${auth}`, request.url);
+  return new URL(`${sharePath(returnPath)}?auth=${auth}`, requestOrigin(request));
 }
 
 function htmlEscape(value: string) {
