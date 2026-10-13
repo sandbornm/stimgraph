@@ -12,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'public', 'demo');
 const videoDir = path.join(outDir, '.pw');
-const chromeBin = '/Users/michael/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
-const playwrightCore = '/Users/michael/C3G/wiseman-advisors/wa-property-clips/dashboard/node_modules/playwright-core';
+// Set these to a local Chrome/Chromium binary and a playwright-core install.
+const chromeBin = process.env.STIMGRAPH_CHROME_BIN;
+const playwrightCore = process.env.STIMGRAPH_PLAYWRIGHT_CORE;
+if (!chromeBin || !playwrightCore) throw new Error('Set STIMGRAPH_CHROME_BIN and STIMGRAPH_PLAYWRIGHT_CORE.');
 const origin = process.env.STIMGRAPH_URL ?? 'http://127.0.0.1:3001';
 
 const beats = [

@@ -24,6 +24,8 @@ The connected browser checks local activity every 30 seconds and refreshes the g
 
 ## Agent activity feed
 
+For how this local feed relates to assistants that read X directly (public reads or a signed-in X plugin), see "How this fits with agents that already read X" in the [README](../README.md#how-this-fits-with-agents-that-already-read-x).
+
 From an allowed, untagged tailnet device:
 
 ```bash
