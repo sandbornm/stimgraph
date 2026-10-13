@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { loadBookmarkTable, loadSoleAccountId } from '@/db/storage';
 import { getActiveXSession } from './x-auth-server';
 import { getRuntimeValue } from './runtime-env';
+import { tailnetAgentAllowed } from './agent-gate';
 import { keywordTopics, type TableRow } from './bookmark-table';
 
 /**
@@ -17,14 +18,8 @@ import { keywordTopics, type TableRow } from './bookmark-table';
 export async function resolveAgentOwner(request: NextRequest): Promise<{ ownerId: string; via: 'session' | 'tailnet' } | null> {
   const active = await getActiveXSession(request);
   if (active) return { ownerId: active.session.profile.id, via: 'session' };
-  if ((getRuntimeValue('STIMGRAPH_AGENT_API') ?? '').toLowerCase() === 'off') return null;
-  // The identity header is only trustworthy behind Tailscale Serve (always-on mode).
-  if (getRuntimeValue('STIMGRAPH_TAILNET') !== 'true') return null;
-  const login = request.headers.get('tailscale-user-login')?.trim();
-  const host = (request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '').split(':')[0];
-  if (!login || !host.endsWith('.ts.net')) return null;
-  const allow = (getRuntimeValue('STIMGRAPH_AGENT_LOGINS') ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (allow.length && !allow.includes(login.toLowerCase())) return null;
+  if (!tailnetAgentAllowed(request.headers, { tailnet: getRuntimeValue('STIMGRAPH_TAILNET'),
+    agentApi: getRuntimeValue('STIMGRAPH_AGENT_API'), logins: getRuntimeValue('STIMGRAPH_AGENT_LOGINS') })) return null;
   const ownerId = await loadSoleAccountId();
   return ownerId ? { ownerId, via: 'tailnet' } : null;
 }

@@ -22,6 +22,8 @@ const ciphertext = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, 
 })));
 db.prepare('INSERT INTO x_sessions VALUES (?, ?, ?, ?, ?, ?)').run('fixture-session', 'fixture-owner',
   `${Buffer.from(iv).toString('base64url')}.${Buffer.from(ciphertext).toString('base64url')}`, Date.now() + 86400_000, Date.now(), Date.now());
+// Simulate an install whose one-time backfill already ran, so the regular capped poll and catch-up are exercised.
+db.prepare('INSERT INTO bookmark_sync_state(owner_id, backfill_completed_at) VALUES (?, ?)').run('fixture-owner', 1);
 const origin = 'https://fixture.example.ts.net';
 const headers = { Host: 'fixture.example.ts.net', 'Tailscale-User-Login': 'owner@example.invalid', 'X-Forwarded-Proto': 'https' };
 let child;
@@ -81,6 +83,13 @@ try {
   assert.equal(rest.events.length, 65);
   assert.equal(rest.sync.catchingUp, 0);
   assert.equal(new Set([...first.events, ...rest.events].map((event) => event.postId)).size, 125);
+  // One-time backfill: pages past overlap, keeps the same 125 posts, and records completion.
+  await stop();
+  db.prepare('UPDATE bookmark_sync_state SET next_poll_at = 0, backfill_completed_at = NULL').run();
+  await start();
+  await waitFor(() => db.prepare('SELECT backfill_completed_at AS t FROM bookmark_sync_state').get()?.t > 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
+  assert.match(output, /bookmark backfill completed: 125 fetched in 2 X calls/);
   const cookie = { Cookie: 'stim_x_session=fixture-session', Origin: origin };
   assert.equal((await request('/api/data', { ...cookie, Origin: 'https://untrusted.invalid' }, { method: 'DELETE' })).status, 403);
   assert.equal((await request('/api/data', cookie, { method: 'DELETE' })).status, 200);
@@ -88,5 +97,5 @@ try {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
   }
   assert.equal((await request('/api/activity')).status, 401);
-  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
+  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, one-time backfill, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
 } finally { await stop(); db.close(); }

@@ -28,6 +28,15 @@ describe('bookmark table', () => {
     const labels = new Set(rows.flatMap((r) => r.topics.map((t) => t.label)));
     assert.deepEqual([...labels], ['agents']);
   });
+  it('extracts hashtags, ignores urls, mentions and numbers', () => {
+    const rows = keywordTopics([
+      row('1', '#x402 payments https://a.co/x402 @x402bot 2026'),
+      row('2', 'x402 payments for agents 2026'),
+      row('3', 'more x402 payments 2026'),
+    ]);
+    const labels = new Set(rows.flatMap((r) => r.topics.map((t) => t.label)));
+    assert.deepEqual([...labels].sort(), ['payments', 'x402']);
+  });
   it('counts topics and clamps limits', () => {
     assert.deepEqual(topicCounts([row('1', 'a', [{ id: 'x', label: 'X' }]), row('2', 'b', [{ id: 'x', label: 'X' }])]), [{ id: 'x', label: 'X', count: 2 }]);
     assert.equal(clampLimit('9999'), 500);

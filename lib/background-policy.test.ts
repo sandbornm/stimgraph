@@ -43,3 +43,10 @@ test('backfill completes when X runs out of pages or the limit is reached', () =
   assert.deepEqual(nextPageStep({ backfill: true, inserted: 0, received: 0, nextToken: 't', fetched: 100 }),
     { continuation: null, stop: true, backfillDone: true });
 });
+
+test('a resumed backfill keeps paging from its saved cursor without stopping at overlap', () => {
+  const step = nextPageStep({ backfill: true, inserted: 0, received: 100, nextToken: 'c2', fetched: 300 });
+  assert.equal(step.continuation, 'c2');
+  assert.equal(step.stop, false);
+  assert.equal(nextPageStep({ backfill: false, inserted: 20, received: 20, nextToken: undefined, fetched: 20 }).stop, true);
+});
