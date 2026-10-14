@@ -12,6 +12,9 @@ type Props = {
 };
 
 const PAGE = 100;
+/** Topic source is encoded in the id prefix: jev- (Jev label), kw- (keyword fallback), else hashtag/Grok. */
+const chipSource = (id: string) => (id.startsWith('jev-') ? ' jev' : id.startsWith('kw-') ? ' kw' : '');
+const chipTitle = (id: string) => (id.startsWith('jev-') ? 'Topic labeled by Jev (TypeSafe AI)' : id.startsWith('kw-') ? 'Keyword topic' : 'Hashtag or Grok topic');
 const dateFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
@@ -53,7 +56,7 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
           </button>
         ))}
         {chips.filter((c) => !active.includes(c.id)).map((c) => (
-          <button key={c.id} type="button" className="bm-chip" onClick={() => toggle(c.id)}>{c.label}<small>{c.count}</small></button>
+          <button key={c.id} type="button" className={`bm-chip${chipSource(c.id)}`} title={chipTitle(c.id)} onClick={() => toggle(c.id)}>{c.label}<small>{c.count}</small></button>
         ))}
       </div>
       <div className="bm-scroll">
@@ -78,7 +81,7 @@ const Row = memo(function Row({ row, active, onTopic }: { row: TableRow; active:
       <td className="bm-text"><a href={row.url} target="_blank" rel="noreferrer">{text.length > 180 ? `${text.slice(0, 179)}…` : text || 'Saved post'}</a></td>
       <td className="bm-date">{row.createdAt && !Number.isNaN(Date.parse(row.createdAt)) ? dateFmt.format(new Date(row.createdAt)) : '—'}</td>
       <td className="bm-topics">{row.topics.map((t) => (
-        <button key={t.id} type="button" className={`bm-chip ${active.includes(t.id) ? 'on' : ''}`} onClick={() => onTopic(t.id)}>{t.label}</button>
+        <button key={t.id} type="button" className={`bm-chip${chipSource(t.id)} ${active.includes(t.id) ? 'on' : ''}`} title={chipTitle(t.id)} onClick={() => onTopic(t.id)}>{t.label}</button>
       ))}</td>
     </tr>
   );

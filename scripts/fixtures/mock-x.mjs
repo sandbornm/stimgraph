@@ -17,6 +17,14 @@ globalThis.fetch = async (input, init) => {
     })), includes: { users: [{ id: 'fixture-author', username: 'fixture', name: 'Fixture' }] },
     meta: { next_token: offset + size < scenario.count ? String(offset + size) : undefined } });
   }
+  if (url.hostname === 'api.typesafe.ai') {
+    // Synthetic Jev: even post ids -> "code" (confident), odd -> "other" (low confidence).
+    const body = JSON.parse(init.body);
+    const id = Number(String(body.state.post).match(/(\d+)$/)?.[1] ?? 0);
+    const choice = id % 2 === 0 ? 'code' : 'other';
+    return Response.json({ model: 'jev-test', answers: { topic: { type: 'choice', choice, confidence: choice === 'code' ? 0.9 : 0.3,
+      probabilities: { [choice]: 1 } } }, usage: { input_tokens: 100, output_tokens: 10 } });
+  }
   if (!['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('Test blocked an unexpected network destination.');
   return original(input, init);
 };

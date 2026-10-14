@@ -16,7 +16,8 @@
     "test": "node --experimental-strip-types --test lib/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && eslint . --ignore-pattern dist --ignore-pattern .next && node --experimental-strip-types --test lib/*.test.ts"
+    "check": "tsc --noEmit && eslint . --ignore-pattern dist --ignore-pattern .next && node --experimental-strip-types --test lib/*.test.ts",
+    "jev:label": "node scripts/jev-label.mjs"
   },
   "dependencies": {
     "next": "16.2.6",

@@ -1,5 +1,6 @@
 import { getD1 } from './index';
 import { ACTIVITY_SCHEMA } from './activity';
+import { JEV_SCHEMA } from './jev-schema';
 import { withOwnerWork } from '@/lib/owner-work';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
@@ -55,6 +56,7 @@ export async function ensureSchema() {
   const d1 = getD1();
   await d1.batch([
     ...ACTIVITY_SCHEMA.map((sql) => d1.prepare(sql)),
+    ...JEV_SCHEMA.map((sql) => d1.prepare(sql)),
     d1.prepare(`CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY NOT NULL,
       username TEXT NOT NULL,
@@ -806,6 +808,8 @@ export async function deleteOwnerData(ownerId: string) {
       d1.prepare('DELETE FROM bookmark_observations WHERE owner_id = ?').bind(ownerId),
       d1.prepare('DELETE FROM bookmark_sync_state WHERE owner_id = ?').bind(ownerId),
       d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM jev_labels WHERE owner_id = ?').bind(ownerId),
+      d1.prepare('DELETE FROM jev_topic_config WHERE owner_id = ?').bind(ownerId),
       d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
       d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
       d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),

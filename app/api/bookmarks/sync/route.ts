@@ -4,6 +4,7 @@ import { storeBookmarks, storeFollows } from '@/db/storage';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { fetchXBookmarks, iterateXBookmarks } from '@/lib/x-bookmarks';
 import { fetchXFollowing, XFollowsScopeError } from '@/lib/x-following';
+import { labelAfterSync } from '@/lib/jev-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -136,6 +137,7 @@ export async function POST(request: NextRequest) {
           followingError: follows.followingError,
         });
         controller.close();
+        void labelAfterSync(active.session.profile.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
         send({ type: 'error', error: message, imported, inserted, insertedIds: allInsertedIds, limit });

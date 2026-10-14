@@ -24,7 +24,7 @@ own X access (public reads, or a signed-in X plugin if you have one) for live or
 lookups. Stimgraph imports with the owner's own X developer app and never posts.
 
 ## Tips
-Start with /api/agent/topics, then filter bookmarks by topic. Topics prefixed "kw-"
+Start with /api/agent/topics, then filter bookmarks by topic. Topics prefixed "jev-" were labeled by Jev (TypeSafe AI), if enabled. Topics prefixed "kw-"
 are keyword clusters for posts that have no AI/hashtag topic yet.
 
 ## Disclaimer

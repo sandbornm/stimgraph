@@ -6,6 +6,7 @@ import { getRuntimeValue } from './runtime-env';
 import { XRequestError } from './x-errors';
 import { BACKFILL_LIMIT, BACKFILL_PAGE_SIZE, POLL_INTERVAL_MS, POLL_LEASE_MS, nextPageStep, pollDelay } from './background-policy';
 import { withOwnerWork } from './owner-work';
+import { labelAfterSync } from './jev-sync';
 
 export async function pollConnectedAccounts() {
   if (getRuntimeValue('STIMGRAPH_BACKGROUND_POLL') !== 'true') return;
@@ -63,6 +64,7 @@ export async function pollConnectedAccounts() {
           backfill_completed_at = COALESCE(backfill_completed_at, ?)
           WHERE owner_id = ?`).bind(Date.now(), Date.now() + POLL_INTERVAL_MS, fetched, continuation,
           backfillDone ? Date.now() : null, stored.owner_id).run();
+        await labelAfterSync(stored.owner_id);
       } catch (error) {
         const failures = claimed.failures + 1;
         const status = error instanceof XRequestError ? `x_${error.status}` : 'temporary_error';
