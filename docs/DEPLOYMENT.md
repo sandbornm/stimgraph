@@ -50,6 +50,7 @@ For one Mac, Keychain is the simpler store. The optional `lib/local-credentials.
 | `net.stimgraph.X_CLIENT_ID` | `stimgraph` | X OAuth client ID |
 | `net.stimgraph.X_CLIENT_SECRET` | `stimgraph` | X OAuth client secret |
 | `net.stimgraph.XAI_API_KEY` | `stimgraph` | Optional xAI key |
+| `net.stimgraph.TYPESAFE_API_KEY` | `stimgraph` | Optional TypeSafe AI key (Jev topic labeling) |
 
 Provision these yourself; do not paste values into chat, commands, or plists. Missing/locked items leave the app unconfigured. A first access may need macOS approval. After provisioning, the operator sets `credentialSource` to `keychain` in the **non-secret** `.tailnet/service.json` and reloads the LaunchAgent. Values go directly into the application process environment, never command arguments or logs. The loader never opens `.env.local`.
 

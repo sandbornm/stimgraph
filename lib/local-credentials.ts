@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 // fixed item names are provisioned manually in Keychain Access by the operator.
 export function loadLocalCredentials() {
   if (process.env.STIMGRAPH_CREDENTIAL_SOURCE !== 'keychain') return;
-  for (const name of ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'XAI_API_KEY']) {
+  for (const name of ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'XAI_API_KEY', 'TYPESAFE_API_KEY']) {
     try {
       const value = execFileSync('/usr/bin/security', [
         'find-generic-password', '-s', `net.stimgraph.${name}`, '-a', 'stimgraph', '-w',

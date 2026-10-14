@@ -52,6 +52,7 @@ Open the app and press **Connect X**. Before you connect, the app shows a built-
 | `X_CLIENT_SECRET` | yes | — | OAuth 2.0 client secret; also encrypts stored X tokens (changing it forces reconnect) |
 | `X_REDIRECT_URI` | yes | — | Exact callback URL registered in the X app |
 | `XAI_API_KEY` | no | empty (Grok features off) | xAI key for optional Grok features |
+| `TYPESAFE_API_KEY` | no | empty (Jev labeling off) | TypeSafe AI key for optional Jev topic labeling |
 | `NEXT_PUBLIC_SITE_URL` | no | `http://127.0.0.1:3001` | Public URL for social metadata |
 | `STIMGRAPH_TAILNET` | always-on | `false` | Enables Tailscale identity checks and HTTPS origin handling |
 | `STIMGRAPH_TAILNET_LOGIN` | always-on | — | The one Tailscale login allowed to use the app remotely |
@@ -63,6 +64,18 @@ Open the app and press **Connect X**. Before you connect, the app shows a built-
 | `STIMGRAPH_AGENT_LOGINS` | no | empty | Optional allowlist of Tailscale logins for the agent API. Empty means any login that passes the tailnet gate, which in always-on mode is only `STIMGRAPH_TAILNET_LOGIN` |
 
 The always-on variables are written into the LaunchAgent by `scripts/install-tailnet-service.mjs` from `.tailnet/service.json`; you do not set them by hand. Secrets never go in the plist.
+
+## Optional: Jev topic labeling (TypeSafe AI)
+
+If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.TYPESAFE_API_KEY`, account `stimgraph`, in always-on mode), Stimgraph asks [Jev](https://docs.typesafe.ai) one *Choice* question per bookmark: which topic from your list fits best.
+
+- **Topic list:** editable per owner via `GET`/`PUT /api/jev` (`{ "topics": { "label": "description", ... } }`, up to 255). The default is agents, openai, claude, models, code, security, crypto-payments, design, startups, other.
+- **Once per post:** the label, confidence, and model version are cached in `jev_labels`. A post is relabeled only if its text or the topic list changes.
+- **When:** new bookmarks are labeled after each sync (up to 200 per run). Label existing ones once with `STIMGRAPH_URL=https://<host>.<tailnet>.ts.net pnpm jev:label` (or `http://127.0.0.1:3001` in development, signed in).
+- **Fallback:** answers below 0.5 confidence or "other" add no Jev topic, so keyword chips apply.
+- **UI:** Jev topics appear as chips marked ◆ (ids start with `jev-`); keyword chips are dashed.
+- **Data sent:** the post text (first 4,000 characters), the author handle, and your topic list. No X credentials. Requests run 4 at a time and retry `429`/`5xx` with backoff.
+- **Cost:** Jev bills input tokens only. At the published price when this was written (about $0.042 per million input tokens) a typical request is ~600 tokens, so labeling 800 bookmarks costs on the order of $0.02. Check TypeSafe's current [models and pricing](https://docs.typesafe.ai/models) page.
 
 ## Limits and expectations
 

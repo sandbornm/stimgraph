@@ -39,7 +39,7 @@ async function waitFor(check) {
 async function start() {
   child = spawn(process.execPath, ['--import', resolve('scripts/fixtures/mock-x.mjs'), 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', '3012'], {
     env: { PATH: process.env.PATH, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
-      X_CLIENT_ID: 'stimgraph-local-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret', XAI_API_KEY: '',
+      X_CLIENT_ID: 'stimgraph-local-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret', XAI_API_KEY: '', TYPESAFE_API_KEY: 'inert-typesafe-test',
       X_REDIRECT_URI: `${origin}/api/auth/x/callback`, STIMGRAPH_TAILNET: 'true',
       STIMGRAPH_TAILNET_LOGIN: 'owner@example.invalid', STIMGRAPH_PUBLIC_ORIGIN: origin,
       STIMGRAPH_DATABASE: path, STIMGRAPH_BACKGROUND_POLL: 'true', STIMGRAPH_CREDENTIAL_SOURCE: 'none', STIMGRAPH_TEST_SCENARIO: scenario },
@@ -58,6 +58,10 @@ try {
   await start();
   await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n === 100
     && db.prepare('SELECT status FROM bookmark_sync_state').get()?.status === 'ok');
+  // Jev labels every new bookmark once; even ids get a confident "code" topic, odd ones fall back.
+  await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM jev_labels').get().n === 100);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM bookmark_topics WHERE source = 'jev' AND topic_id = 'jev-code'").get().n, 50);
+  const firstLabeledAt = db.prepare('SELECT MAX(labeled_at) AS t FROM jev_labels').get().t;
   const first = await (await request('/api/activity?limit=60')).json();
   assert.equal(first.events.length, 60);
   assert.equal(first.sync.catchingUp, 1);
@@ -79,6 +83,11 @@ try {
   db.prepare('UPDATE bookmark_sync_state SET next_poll_at = 0').run();
   await start();
   await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n === 125);
+  await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM jev_labels').get().n === 125);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jev_labels WHERE labeled_at <= ?').get(firstLabeledAt).n, 100, 'unchanged posts are not relabeled');
+  const jevStatus = await (await request('/api/jev')).json();
+  assert.equal(jevStatus.enabled, true);
+  assert.equal(jevStatus.labeled, 125);
   const rest = await (await request(`/api/activity?after=${first.nextCursor}`)).json();
   assert.equal(rest.events.length, 65);
   assert.equal(rest.sync.catchingUp, 0);
@@ -97,5 +106,5 @@ try {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
   }
   assert.equal((await request('/api/activity')).status, 401);
-  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, one-time backfill, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
+  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, one-time backfill, Jev labeling once per post, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
 } finally { await stop(); db.close(); }
