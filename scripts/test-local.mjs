@@ -91,6 +91,7 @@ try {
   // Why-saved intent and actionable/stale come from the same call; below 0.5 is stored as NULL.
   const count = (sql) => db.prepare(sql).get().n;
   assert.equal(count('SELECT COUNT(*) AS n FROM jev_labels WHERE signals_at IS NULL'), 0);
+  assert.equal(count('SELECT COUNT(*) AS n FROM jev_labels WHERE stale_evaluated_at IS NULL'), 0);
   assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent = 'read'"), 0);
   assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent IS NULL"), count('SELECT COUNT(*) AS n FROM jev_labels WHERE CAST(post_id AS INTEGER) % 4 = 2'));
   assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent = 'try'"), count('SELECT COUNT(*) AS n FROM jev_labels WHERE CAST(post_id AS INTEGER) % 4 = 0'));

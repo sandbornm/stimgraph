@@ -61,9 +61,41 @@ export type JevIntent = keyof typeof JEV_INTENTS;
 export const isJevIntent = (value: unknown): value is JevIntent => typeof value === 'string' && Object.hasOwn(JEV_INTENTS, value);
 
 export const JEV_FRESHNESS = {
-  actionable: 'Still useful to act on or come back to: evergreen tools, ideas, references or open opportunities',
-  stale: 'Time-bound news, announcements, events, deadlines or hot takes that are likely outdated now',
+  actionable: 'Still useful to act on or come back to as of evaluated_on: evergreen tools, ideas, references or open opportunities',
+  stale: 'Time-bound news, announcements, events, deadlines or hot takes that are outdated as of evaluated_on given posted_at',
 } as const;
+
+/** Re-ask freshness once the last stale/actionable judgment is older than this. */
+export const JEV_STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type JevQuestion = 'topic' | 'intent' | 'freshness';
+const JEV_QUESTION_ORDER: readonly JevQuestion[] = ['topic', 'intent', 'freshness'];
+
+function selectedQuestions(questions?: readonly JevQuestion[]) {
+  const wanted = new Set(questions ?? JEV_QUESTION_ORDER);
+  const picked = JEV_QUESTION_ORDER.filter((question) => wanted.has(question));
+  return picked.length ? picked : JEV_QUESTION_ORDER;
+}
+
+/** True when freshness was never evaluated, or the evaluation is older than 7 days. */
+export function freshnessDue(evaluatedAtMs: number | null | undefined, nowMs: number, ttlMs = JEV_STALE_TTL_MS) {
+  return evaluatedAtMs == null || nowMs - evaluatedAtMs > ttlMs;
+}
+
+export type JevLabelSnapshot = {
+  textHash: string | null; topicsHash: string | null; signalsAt: number | null; staleEvaluatedAt: number | null;
+};
+
+/**
+ * `full` when the topic or why-saved intent is missing or outdated.
+ * `freshness` when those are current but the stale judgment is missing or older than 7 days.
+ * `skip` when the whole label is still current.
+ */
+export function labelPlan(row: JevLabelSnapshot, textHash: string, topicsHash: string, nowMs: number) {
+  const current = row.textHash === textHash && row.topicsHash === topicsHash && row.signalsAt != null;
+  if (!current) return 'full' as const;
+  return freshnessDue(row.staleEvaluatedAt, nowMs) ? 'freshness' as const : 'skip' as const;
+}
 
 /** A secondary label, already thresholded: null when Jev was unsure or did not answer. */
 export type JevSignal<T> = { value: T; confidence: number } | null;
@@ -73,27 +105,37 @@ export type JevAnswer = {
   intent?: JevSignal<JevIntent>; stale?: JevSignal<boolean>;
 };
 
-export function buildRequest(text: string, author: string, topics: JevTopics) {
+export function buildRequest(
+  text: string, author: string, topics: JevTopics, createdAt: string | null, evaluatedAt: string,
+  questions?: readonly JevQuestion[],
+) {
+  const asked = selectedQuestions(questions);
+  const all = {
+    topic: {
+      type: 'choice' as const,
+      instructions: 'Which topic best describes this saved X post?',
+      criteria: Object.fromEntries(Object.entries(topics).map(([k, v]) => [k, v || null])),
+    },
+    intent: {
+      type: 'choice' as const,
+      instructions: 'Why did the owner most likely save this X post?',
+      criteria: { ...JEV_INTENTS },
+    },
+    freshness: {
+      type: 'choice' as const,
+      instructions: 'Using `posted_at` and `evaluated_on`, is this saved X post still actionable on `evaluated_on`, or is it time-bound news that has gone stale since `posted_at`?',
+      criteria: { ...JEV_FRESHNESS },
+    },
+  };
   return {
     model: JEV_MODEL,
-    state: { author: `@${author}`, post: text.slice(0, MAX_STATE_CHARS) },
-    questions: {
-      topic: {
-        type: 'choice',
-        instructions: 'Which topic best describes this saved X post?',
-        criteria: Object.fromEntries(Object.entries(topics).map(([k, v]) => [k, v || null])),
-      },
-      intent: {
-        type: 'choice',
-        instructions: 'Why did the owner most likely save this X post?',
-        criteria: { ...JEV_INTENTS },
-      },
-      freshness: {
-        type: 'choice',
-        instructions: 'Is this saved X post still actionable, or is it time-bound news that has likely gone stale?',
-        criteria: { ...JEV_FRESHNESS },
-      },
+    state: {
+      author: `@${author}`,
+      post: text.slice(0, MAX_STATE_CHARS),
+      posted_at: createdAt,
+      evaluated_on: evaluatedAt,
     },
+    questions: Object.fromEntries(asked.map((name) => [name, all[name]])),
   };
 }
 
@@ -119,23 +161,30 @@ export class JevError extends Error {
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-/** One Choice call. Retries 429/5xx with Retry-After or exponential backoff. Never logs the key. */
-export async function labelPost({ apiKey, text, author, topics, fetchImpl = fetch, retries = 3, baseDelayMs = 1000 }: {
-  apiKey: string; text: string; author: string; topics: JevTopics; fetchImpl?: FetchLike; retries?: number; baseDelayMs?: number;
+/** One Jev call. `questions` defaults to topic, intent, and freshness. Retries 429/5xx. Never logs the key. */
+export async function labelPost({
+  apiKey, text, author, topics, createdAt, evaluatedAt, questions, fetchImpl = fetch, retries = 3, baseDelayMs = 1000,
+}: {
+  apiKey: string; text: string; author: string; topics: JevTopics;
+  createdAt: string | null; evaluatedAt: string; questions?: readonly JevQuestion[];
+  fetchImpl?: FetchLike; retries?: number; baseDelayMs?: number;
 }): Promise<JevAnswer> {
+  const asked = selectedQuestions(questions);
   for (let attempt = 0; ; attempt++) {
     const response = await fetchImpl(JEV_ENDPOINT, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRequest(text, author, topics)),
+      body: JSON.stringify(buildRequest(text, author, topics, createdAt, evaluatedAt, asked)),
       signal: AbortSignal.timeout(30_000),
     });
     if (response.ok) {
       const payload = await response.json() as { model?: string; answers?: { topic?: ChoiceAnswer; intent?: ChoiceAnswer; freshness?: ChoiceAnswer } };
+      const signals = parseSignals(payload.answers);
+      const model = payload.model ?? JEV_MODEL;
+      if (!asked.includes('topic')) return { label: '', confidence: 0, probabilities: {}, model, ...signals };
       const answer = payload.answers?.topic;
       if (!answer?.choice || !(answer.choice in topics)) throw new JevError(502, 'Jev returned no valid topic.');
-      return { label: answer.choice, confidence: Number(answer.confidence ?? 0), probabilities: answer.probabilities ?? {},
-        model: payload.model ?? JEV_MODEL, ...parseSignals(payload.answers) };
+      return { label: answer.choice, confidence: Number(answer.confidence ?? 0), probabilities: answer.probabilities ?? {}, model, ...signals };
     }
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt >= retries) throw new JevError(response.status);

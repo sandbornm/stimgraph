@@ -1,6 +1,6 @@
 import { getD1 } from './index';
 import { ACTIVITY_SCHEMA } from './activity';
-import { JEV_SCHEMA, JEV_SIGNAL_COLUMNS } from './jev-schema';
+import { JEV_SCHEMA, JEV_SIGNAL_COLUMNS, JEV_STALE_EVAL_COLUMNS } from './jev-schema';
 import { withOwnerWork } from '@/lib/owner-work';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
@@ -193,8 +193,8 @@ export async function ensureSchema() {
   } catch (error) {
     if (!/duplicate column/i.test(String(error))) throw error;
   }
-  // Migration 0007, applied idempotently for local SQLite/D1 databases created before it.
-  for (const column of JEV_SIGNAL_COLUMNS) {
+  // Migrations 0007 and 0008, applied idempotently for databases created before them.
+  for (const column of [...JEV_SIGNAL_COLUMNS, ...JEV_STALE_EVAL_COLUMNS]) {
     try {
       await d1.prepare(`ALTER TABLE jev_labels ADD COLUMN ${column}`).run();
     } catch (error) {

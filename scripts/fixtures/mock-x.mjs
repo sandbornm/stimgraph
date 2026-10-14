@@ -26,12 +26,18 @@ globalThis.fetch = async (input, init) => {
     // Freshness: id%3==0 -> stale (0.8), else actionable (0.7).
     const intent = id % 4 === 0 ? ['try', 0.8] : id % 4 === 2 ? ['read', 0.4] : ['reference', 0.9];
     const freshness = id % 3 === 0 ? ['stale', 0.8] : ['actionable', 0.7];
-    if (!body.questions.intent || !body.questions.freshness) throw new Error('Jev request is missing intent/freshness questions.');
-    return Response.json({ model: 'jev-test', answers: { topic: { type: 'choice', choice, confidence: choice === 'code' ? 0.9 : 0.3,
-      probabilities: { [choice]: 1 } },
-      intent: { type: 'choice', choice: intent[0], confidence: intent[1], probabilities: { [intent[0]]: intent[1] } },
-      freshness: { type: 'choice', choice: freshness[0], confidence: freshness[1], probabilities: { [freshness[0]]: freshness[1] } } },
-      usage: { input_tokens: 100, output_tokens: 10 } });
+    const questions = body.questions ?? {};
+    const answers = {};
+    if (questions.topic) answers.topic = { type: 'choice', choice, confidence: choice === 'code' ? 0.9 : 0.3, probabilities: { [choice]: 1 } };
+    if (questions.intent) answers.intent = { type: 'choice', choice: intent[0], confidence: intent[1], probabilities: { [intent[0]]: intent[1] } };
+    if (questions.freshness) {
+      if (!Object.hasOwn(body.state ?? {}, 'posted_at') || typeof body.state?.evaluated_on !== 'string') {
+        throw new Error('Freshness question requires state.posted_at and state.evaluated_on.');
+      }
+      answers.freshness = { type: 'choice', choice: freshness[0], confidence: freshness[1], probabilities: { [freshness[0]]: freshness[1] } };
+    }
+    if (!questions.topic && !questions.intent && !questions.freshness) throw new Error('Jev request has no questions.');
+    return Response.json({ model: 'jev-test', answers, usage: { input_tokens: 100, output_tokens: 10 } });
   }
   if (!['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('Test blocked an unexpected network destination.');
   return original(input, init);

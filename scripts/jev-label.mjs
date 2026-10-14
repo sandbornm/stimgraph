@@ -1,5 +1,6 @@
-// One-shot: ask the running Stimgraph server to label all bookmarks that lack a current
-// Jev label (topic, why-saved intent, actionable/stale; one Jev call per post). The server holds TYPESAFE_API_KEY; this script never sees it.
+// One-shot: ask the running Stimgraph server to label bookmarks that lack a current Jev
+// label, and to refresh actionable/stale when that judgment is missing or older than 7 days.
+// A freshness refresh does not redo topic or intent. The server holds TYPESAFE_API_KEY; this script never sees it.
 // Usage: STIMGRAPH_URL=https://<host>.<tailnet>.ts.net pnpm jev:label [limit]
 const origin = process.env.STIMGRAPH_URL ?? 'http://127.0.0.1:3001';
 const limit = Number(process.argv[2] ?? 1000);

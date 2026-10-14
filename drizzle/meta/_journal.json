@@ -57,6 +57,13 @@
       "when": 1792200000000,
       "tag": "0007_jev_intent_stale",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792300000000,
+      "tag": "0008_jev_stale_evaluated_at",
+      "breakpoints": true
     }
   ]
 }

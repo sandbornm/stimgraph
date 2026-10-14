@@ -1,7 +1,7 @@
 import { getD1 } from './index';
 import { ensureSchema } from './storage';
 import {
-  DEFAULT_JEV_TOPICS, JEV_CONCURRENCY, acceptedLabel, fingerprint, labelPost, mapLimit, normalizeTopics, topicsKey,
+  DEFAULT_JEV_TOPICS, JEV_CONCURRENCY, acceptedLabel, fingerprint, labelPlan, labelPost, mapLimit, normalizeTopics, topicsKey,
   type JevTopics,
 } from '@/lib/jev';
 
@@ -29,9 +29,11 @@ export type JevRunResult = {
 };
 
 /**
- * Label bookmarks that have no current Jev label. A post is relabeled only when its text
- * or the topic list changed. Accepted labels become `jev-<label>` topics (source 'jev');
- * low-confidence or "other" answers are cached but add no topic, so keyword chips apply.
+ * Label bookmarks that have no current Jev label. A post is fully relabeled when its text,
+ * the topic list, or its why-saved signals are missing or outdated. Accepted labels become
+ * `jev-<label>` topics (source 'jev'); low-confidence or "other" answers are cached but add no topic.
+ * A current topic and intent are kept. Freshness is re-asked alone when that evaluation is
+ * missing or older than 7 days, and only the stale columns are updated.
  */
 export async function labelPendingBookmarks(ownerId: string, apiKey: string, { limit = 1000, fetchImpl }: {
   limit?: number; fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
@@ -40,42 +42,62 @@ export async function labelPendingBookmarks(ownerId: string, apiKey: string, { l
   const d1 = getD1();
   const topics = await loadJevTopics(ownerId);
   const topicsHash = await fingerprint(topicsKey(topics));
-  const rows = (await d1.prepare(`SELECT b.post_id, b.text, b.author_username, l.text_hash, l.topics_hash, l.signals_at
+  const rows = (await d1.prepare(`SELECT b.post_id, b.text, b.author_username, b.created_at, l.text_hash, l.topics_hash,
+    l.signals_at, l.stale_evaluated_at
     FROM bookmarks b LEFT JOIN jev_labels l ON l.owner_id = b.owner_id AND l.post_id = b.post_id
     WHERE b.owner_id = ? ORDER BY b.synced_at DESC`).bind(ownerId)
-    .all<{ post_id: string; text: string; author_username: string; text_hash: string | null; topics_hash: string | null; signals_at: number | null }>()).results;
-  const pending: Array<{ postId: string; text: string; author: string; textHash: string }> = [];
+    .all<{
+      post_id: string; text: string; author_username: string; created_at: string | null;
+      text_hash: string | null; topics_hash: string | null; signals_at: number | null; stale_evaluated_at: number | null;
+    }>()).results;
+  const now = Date.now();
+  const evaluatedAt = new Date(now).toISOString();
+  const pending: Array<{
+    mode: 'full' | 'freshness'; postId: string; text: string; author: string; textHash: string; createdAt: string | null;
+  }> = [];
   let skipped = 0;
   for (const row of rows) {
     const textHash = await fingerprint(row.text);
-    // Labels are saved once per post: skip when text, topic list and signals are all current.
-    if (row.text_hash === textHash && row.topics_hash === topicsHash && row.signals_at != null) { skipped += 1; continue; }
-    if (pending.length < limit) pending.push({ postId: row.post_id, text: row.text, author: row.author_username, textHash });
+    const mode = labelPlan({
+      textHash: row.text_hash, topicsHash: row.topics_hash, signalsAt: row.signals_at, staleEvaluatedAt: row.stale_evaluated_at,
+    }, textHash, topicsHash, now);
+    if (mode === 'skip') { skipped += 1; continue; }
+    if (pending.length < limit) pending.push({
+      mode, postId: row.post_id, text: row.text, author: row.author_username, textHash, createdAt: row.created_at,
+    });
   }
-  const results = await mapLimit(pending, JEV_CONCURRENCY, (item) =>
-    labelPost({ apiKey, text: item.text, author: item.author, topics, fetchImpl }));
-  const now = Date.now();
+  const results = await mapLimit(pending, JEV_CONCURRENCY, (item) => labelPost({
+    apiKey, text: item.text, author: item.author, topics, createdAt: item.createdAt, evaluatedAt,
+    questions: item.mode === 'freshness' ? ['freshness'] : undefined, fetchImpl,
+  }));
   const statements: D1PreparedStatement[] = [];
   let accepted = 0;
   let intents = 0;
   let staleFlags = 0;
   for (const { item, value } of results) {
     if (!value) continue;
+    const staleBit = value.stale ? (value.stale.value ? 1 : 0) : null;
+    const staleConfidence = value.stale?.confidence ?? null;
+    if (value.stale) staleFlags += 1;
+    if (item.mode === 'freshness') {
+      statements.push(d1.prepare(`UPDATE jev_labels SET stale = ?, stale_confidence = ?, stale_evaluated_at = ?
+        WHERE owner_id = ? AND post_id = ?`).bind(staleBit, staleConfidence, now, ownerId, item.postId));
+      continue;
+    }
     statements.push(
       d1.prepare(`INSERT INTO jev_labels(owner_id, post_id, text_hash, topics_hash, label, confidence, model, labeled_at,
-        intent, intent_confidence, stale, stale_confidence, signals_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, post_id) DO UPDATE SET text_hash = excluded.text_hash,
+        intent, intent_confidence, stale, stale_confidence, signals_at, stale_evaluated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, post_id) DO UPDATE SET text_hash = excluded.text_hash,
         topics_hash = excluded.topics_hash, label = excluded.label, confidence = excluded.confidence,
         model = excluded.model, labeled_at = excluded.labeled_at, intent = excluded.intent,
         intent_confidence = excluded.intent_confidence, stale = excluded.stale,
-        stale_confidence = excluded.stale_confidence, signals_at = excluded.signals_at`)
+        stale_confidence = excluded.stale_confidence, signals_at = excluded.signals_at,
+        stale_evaluated_at = excluded.stale_evaluated_at`)
         .bind(ownerId, item.postId, item.textHash, topicsHash, value.label, value.confidence, value.model, now,
-          value.intent?.value ?? null, value.intent?.confidence ?? null,
-          value.stale ? (value.stale.value ? 1 : 0) : null, value.stale?.confidence ?? null, now),
+          value.intent?.value ?? null, value.intent?.confidence ?? null, staleBit, staleConfidence, now, now),
       d1.prepare(`DELETE FROM bookmark_topics WHERE owner_id = ? AND post_id = ? AND source = 'jev'`).bind(ownerId, item.postId),
     );
     if (value.intent) intents += 1;
-    if (value.stale) staleFlags += 1;
     const label = acceptedLabel(value);
     if (!label) continue;
     accepted += 1;
