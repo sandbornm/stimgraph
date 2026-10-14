@@ -1,5 +1,5 @@
 // One-shot: ask the running Stimgraph server to label all bookmarks that lack a current
-// Jev label. The server holds TYPESAFE_API_KEY; this script never sees it.
+// Jev label (topic, why-saved intent, actionable/stale; one Jev call per post). The server holds TYPESAFE_API_KEY; this script never sees it.
 // Usage: STIMGRAPH_URL=https://<host>.<tailnet>.ts.net pnpm jev:label [limit]
 const origin = process.env.STIMGRAPH_URL ?? 'http://127.0.0.1:3001';
 const limit = Number(process.argv[2] ?? 1000);
@@ -14,3 +14,4 @@ if (!response.ok) {
   process.exit(1);
 }
 console.log(`Considered ${body.considered}, labeled ${body.labeled}, accepted ${body.accepted}, failed ${body.failed}, already current ${body.skipped}.`);
+console.log(`Why-saved intents ${body.intents ?? 0}, actionable/stale flags ${body.staleFlags ?? 0} (below 0.5 confidence is stored as unknown).`);

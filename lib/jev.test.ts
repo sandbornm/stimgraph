@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  DEFAULT_JEV_TOPICS, JEV_ENDPOINT, JevError, acceptedLabel, buildRequest, fingerprint, labelPost, mapLimit, normalizeTopics, topicsKey,
+  DEFAULT_JEV_TOPICS, JEV_ENDPOINT, JEV_INTENTS, JevError, acceptedLabel, buildRequest, fingerprint, labelPost, mapLimit, normalizeTopics, parseSignals, topicsKey,
 } from './jev.ts';
 
 const ok = (choice: string, confidence = 0.9) => Response.json({ model: 'jev-1.13.0',
@@ -21,7 +21,7 @@ test('sends bearer auth to the documented endpoint and parses the answer', async
   const answer = await labelPost({ apiKey: 'k-test', text: 'new CVE', author: 'a', topics: DEFAULT_JEV_TOPICS,
     fetchImpl: async (url, init) => { seen = { url, auth: new Headers(init.headers).get('authorization') }; return ok('security'); } });
   assert.deepEqual(seen, { url: JEV_ENDPOINT, auth: 'Bearer k-test' });
-  assert.deepEqual(answer, { label: 'security', confidence: 0.9, probabilities: { security: 0.9 }, model: 'jev-1.13.0' });
+  assert.deepEqual(answer, { label: 'security', confidence: 0.9, probabilities: { security: 0.9 }, model: 'jev-1.13.0', intent: null, stale: null });
 });
 
 test('retries 429 honoring retry-after, then gives up on persistent or client errors', async () => {
@@ -70,4 +70,31 @@ test('mapLimit bounds concurrency and collects failures', async () => {
   assert.equal(peak, 4);
   assert.equal(results.length, 9);
   assert.equal(results.filter((r) => r.error).length, 1);
+});
+
+const okAll = (intent: string, ic: number, freshness: string, fc: number) => Response.json({ model: 'jev-1.13.0', answers: {
+  topic: { type: 'choice', choice: 'code', confidence: 0.8, probabilities: {} },
+  intent: { type: 'choice', choice: intent, confidence: ic, probabilities: {} },
+  freshness: { type: 'choice', choice: freshness, confidence: fc, probabilities: {} },
+} });
+
+test('asks topic, why-saved intent and freshness in one request', async () => {
+  const body = buildRequest('t', 'a', DEFAULT_JEV_TOPICS);
+  assert.deepEqual(Object.keys(body.questions), ['topic', 'intent', 'freshness']);
+  assert.deepEqual(Object.keys(body.questions.intent.criteria), ['try', 'read', 'reference', 'inspiration']);
+  assert.deepEqual(Object.keys(body.questions.freshness.criteria), ['actionable', 'stale']);
+  let calls = 0;
+  const answer = await labelPost({ apiKey: 'k', text: 't', author: 'a', topics: DEFAULT_JEV_TOPICS,
+    fetchImpl: async () => { calls++; return okAll('try', 0.7, 'stale', 0.9); } });
+  assert.equal(calls, 1);
+  assert.deepEqual(answer.intent, { value: 'try', confidence: 0.7 });
+  assert.deepEqual(answer.stale, { value: true, confidence: 0.9 });
+});
+
+test('intent and stale below 0.5 confidence or invalid are null', () => {
+  assert.deepEqual(parseSignals({ intent: { choice: 'read', confidence: 0.49 }, freshness: { choice: 'actionable', confidence: 0.5 } }),
+    { intent: null, stale: { value: false, confidence: 0.5 } });
+  assert.deepEqual(parseSignals({ intent: { choice: 'weather', confidence: 1 }, freshness: { choice: 'maybe', confidence: 1 } }), { intent: null, stale: null });
+  assert.deepEqual(parseSignals(undefined), { intent: null, stale: null });
+  assert.equal(Object.keys(JEV_INTENTS).length, 4);
 });

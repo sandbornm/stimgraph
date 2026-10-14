@@ -1,6 +1,6 @@
 import { getD1 } from './index';
 import { ACTIVITY_SCHEMA } from './activity';
-import { JEV_SCHEMA } from './jev-schema';
+import { JEV_SCHEMA, JEV_SIGNAL_COLUMNS } from './jev-schema';
 import { withOwnerWork } from '@/lib/owner-work';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
@@ -192,6 +192,14 @@ export async function ensureSchema() {
     await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
   } catch (error) {
     if (!/duplicate column/i.test(String(error))) throw error;
+  }
+  // Migration 0007, applied idempotently for local SQLite/D1 databases created before it.
+  for (const column of JEV_SIGNAL_COLUMNS) {
+    try {
+      await d1.prepare(`ALTER TABLE jev_labels ADD COLUMN ${column}`).run();
+    } catch (error) {
+      if (!/duplicate column/i.test(String(error))) throw error;
+    }
   }
   initialized = true;
 }
@@ -867,7 +875,7 @@ export async function loadShare(id: string): Promise<{ id: string; ownerId: stri
 }
 
 export type BookmarkTableData = {
-  bookmarks: Array<{ post_id: string; author_username: string; author_name: string; text: string; created_at: string | null }>;
+  bookmarks: Array<{ post_id: string; author_username: string; author_name: string; text: string; created_at: string | null; intent?: string | null; stale?: number | null }>;
   topics: Array<{ post_id: string; topic_id: string; label: string }>;
   total: number;
 };
@@ -877,9 +885,10 @@ export async function loadBookmarkTable(ownerId: string, limit = 2000): Promise<
   await ensureSchema();
   const d1 = getD1();
   const [bookmarkRows, topicRows, totals] = await d1.batch([
-    d1.prepare(`SELECT post_id, author_username, author_name, text, created_at
-      FROM bookmarks WHERE owner_id = ?
-      ORDER BY created_at DESC, synced_at DESC LIMIT ?`).bind(ownerId, limit),
+    d1.prepare(`SELECT b.post_id, b.author_username, b.author_name, b.text, b.created_at, l.intent, l.stale
+      FROM bookmarks b LEFT JOIN jev_labels l ON l.owner_id = b.owner_id AND l.post_id = b.post_id
+      WHERE b.owner_id = ?
+      ORDER BY b.created_at DESC, b.synced_at DESC LIMIT ?`).bind(ownerId, limit),
     d1.prepare(`SELECT bt.post_id, bt.topic_id, t.label
       FROM bookmark_topics bt
       JOIN topics t ON t.owner_id = bt.owner_id AND t.id = bt.topic_id

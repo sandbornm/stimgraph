@@ -50,7 +50,28 @@ export function topicsKey(topics: JevTopics) {
   return JSON.stringify(Object.keys(topics).sort().map((k) => [k, topics[k]]));
 }
 
-export type JevAnswer = { label: string; confidence: number; probabilities: Record<string, number>; model: string };
+/** Why the owner saved a post. Fixed set so chips and the agent API stay stable. */
+export const JEV_INTENTS = {
+  try: 'A tool, library, product, technique or recipe to try out or use hands-on',
+  read: 'An article, paper, thread or long-form piece to read or watch later',
+  reference: 'Reference material to look up again: docs, data, cheat sheets, lists, how-tos',
+  inspiration: 'Inspiration: ideas, design, craft, writing or vision worth remembering',
+} as const;
+export type JevIntent = keyof typeof JEV_INTENTS;
+export const isJevIntent = (value: unknown): value is JevIntent => typeof value === 'string' && Object.hasOwn(JEV_INTENTS, value);
+
+export const JEV_FRESHNESS = {
+  actionable: 'Still useful to act on or come back to: evergreen tools, ideas, references or open opportunities',
+  stale: 'Time-bound news, announcements, events, deadlines or hot takes that are likely outdated now',
+} as const;
+
+/** A secondary label, already thresholded: null when Jev was unsure or did not answer. */
+export type JevSignal<T> = { value: T; confidence: number } | null;
+
+export type JevAnswer = {
+  label: string; confidence: number; probabilities: Record<string, number>; model: string;
+  intent?: JevSignal<JevIntent>; stale?: JevSignal<boolean>;
+};
 
 export function buildRequest(text: string, author: string, topics: JevTopics) {
   return {
@@ -62,8 +83,32 @@ export function buildRequest(text: string, author: string, topics: JevTopics) {
         instructions: 'Which topic best describes this saved X post?',
         criteria: Object.fromEntries(Object.entries(topics).map(([k, v]) => [k, v || null])),
       },
+      intent: {
+        type: 'choice',
+        instructions: 'Why did the owner most likely save this X post?',
+        criteria: { ...JEV_INTENTS },
+      },
+      freshness: {
+        type: 'choice',
+        instructions: 'Is this saved X post still actionable, or is it time-bound news that has likely gone stale?',
+        criteria: { ...JEV_FRESHNESS },
+      },
     },
   };
+}
+
+type ChoiceAnswer = { choice?: string; confidence?: number; probabilities?: Record<string, number> };
+
+/** Threshold a secondary Choice answer; below `threshold` (or invalid) it is stored as null. */
+export function parseSignals(answers: { intent?: ChoiceAnswer; freshness?: ChoiceAnswer } | undefined, threshold = JEV_MIN_CONFIDENCE) {
+  const conf = (a?: ChoiceAnswer) => Number(a?.confidence ?? 0);
+  const intentAnswer = answers?.intent;
+  const intent: JevSignal<JevIntent> = isJevIntent(intentAnswer?.choice) && conf(intentAnswer) >= threshold
+    ? { value: intentAnswer.choice, confidence: conf(intentAnswer) } : null;
+  const fresh = answers?.freshness;
+  const stale: JevSignal<boolean> = (fresh?.choice === 'stale' || fresh?.choice === 'actionable') && conf(fresh) >= threshold
+    ? { value: fresh.choice === 'stale', confidence: conf(fresh) } : null;
+  return { intent, stale };
 }
 
 export class JevError extends Error {
@@ -86,10 +131,11 @@ export async function labelPost({ apiKey, text, author, topics, fetchImpl = fetc
       signal: AbortSignal.timeout(30_000),
     });
     if (response.ok) {
-      const payload = await response.json() as { model?: string; answers?: { topic?: { choice?: string; confidence?: number; probabilities?: Record<string, number> } } };
+      const payload = await response.json() as { model?: string; answers?: { topic?: ChoiceAnswer; intent?: ChoiceAnswer; freshness?: ChoiceAnswer } };
       const answer = payload.answers?.topic;
       if (!answer?.choice || !(answer.choice in topics)) throw new JevError(502, 'Jev returned no valid topic.');
-      return { label: answer.choice, confidence: Number(answer.confidence ?? 0), probabilities: answer.probabilities ?? {}, model: payload.model ?? JEV_MODEL };
+      return { label: answer.choice, confidence: Number(answer.confidence ?? 0), probabilities: answer.probabilities ?? {},
+        model: payload.model ?? JEV_MODEL, ...parseSignals(payload.answers) };
     }
     const retryable = response.status === 429 || response.status >= 500;
     if (!retryable || attempt >= retries) throw new JevError(response.status);

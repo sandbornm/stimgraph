@@ -88,6 +88,30 @@ try {
   const jevStatus = await (await request('/api/jev')).json();
   assert.equal(jevStatus.enabled, true);
   assert.equal(jevStatus.labeled, 125);
+  // Why-saved intent and actionable/stale come from the same call; below 0.5 is stored as NULL.
+  const count = (sql) => db.prepare(sql).get().n;
+  assert.equal(count('SELECT COUNT(*) AS n FROM jev_labels WHERE signals_at IS NULL'), 0);
+  assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent = 'read'"), 0);
+  assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent IS NULL"), count('SELECT COUNT(*) AS n FROM jev_labels WHERE CAST(post_id AS INTEGER) % 4 = 2'));
+  assert.equal(count("SELECT COUNT(*) AS n FROM jev_labels WHERE intent = 'try'"), count('SELECT COUNT(*) AS n FROM jev_labels WHERE CAST(post_id AS INTEGER) % 4 = 0'));
+  assert.equal(count('SELECT COUNT(*) AS n FROM jev_labels WHERE stale = 1'), count('SELECT COUNT(*) AS n FROM jev_labels WHERE CAST(post_id AS INTEGER) % 3 = 0'));
+  assert.equal(jevStatus.intents, count('SELECT COUNT(*) AS n FROM jev_labels WHERE intent IS NOT NULL'));
+  const agentCookie = { Cookie: 'stim_x_session=fixture-session' };
+  const toTry = await (await request('/api/agent/bookmarks?intent=try&stale=hide&limit=500', agentCookie)).json();
+  assert(toTry.bookmarks.length > 0);
+  for (const bookmark of toTry.bookmarks) {
+    assert.equal(bookmark.intent, 'try');
+    assert.equal(bookmark.stale, false);
+    assert.equal(Number(bookmark.id) % 4, 0);
+  }
+  assert(toTry.intents.some((c) => c.id === 'try'));
+  const all = await (await request('/api/agent/bookmarks?limit=500', agentCookie)).json();
+  assert.equal(all.bookmarks.length, 125, 'stale posts are included by default in the agent API');
+  assert(all.bookmarks.every((b) => 'intent' in b && 'stale' in b));
+  const md = await (await request('/api/agent/export?format=md&stale=only', agentCookie)).text();
+  assert.match(md, /\| Why saved \| Stale \|/);
+  assert(md.trim().split('\n').slice(2).every((line) => line.endsWith('| stale |')));
+  assert.match(await (await request('/llms.txt')).text(), /intent=try&stale=hide/);
   const rest = await (await request(`/api/activity?after=${first.nextCursor}`)).json();
   assert.equal(rest.events.length, 65);
   assert.equal(rest.sync.catchingUp, 0);
@@ -106,5 +130,5 @@ try {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
   }
   assert.equal((await request('/api/activity')).status, 401);
-  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, one-time backfill, Jev labeling once per post, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
+  console.log('Node production integration passed: automatic polling with no browser, SQLite persistence, token refresh, cursor recovery after restart, one-time backfill, Jev labeling once per post (topic, why-saved intent, actionable/stale), agent API intent/stale filters, private HTTPS cookie/origin handling, assets, and complete deletion. No live provider calls.');
 } finally { await stop(); db.close(); }
