@@ -1,12 +1,46 @@
 # Stimgraph
 
-**STIM = Stuff That Interests Me.** Stimgraph imports your X bookmarks into a private, local database and gives you a searchable table with topic chips, a graph/globe explorer, research tools, and a read-only link that AI agents can use to search and summarize your saves.
+> **Status: early / under active development; expect breaking changes.** Schemas, routes, and the UI can change between commits. Pin a commit if you depend on it.
+
+**STIM = Stuff That Interests Me.** Stimgraph pulls your X bookmarks into a private database on your own machine and turns them into something you can explore: a searchable table with topic chips, a 3D globe of the topics, people, and posts you save, research tools, and a read-only link your AI agents can query ("what have I saved about…?"). It is read-only against X, it runs on `127.0.0.1`, and your data never leaves your machine unless you press an optional Grok action.
+
+![Stimgraph demo: the bookmark globe, inspector, and search](docs/screenshots/demo.gif)
+
+Full silent walkthrough: [public/demo/stimgraph-silent.mp4](public/demo/stimgraph-silent.mp4). The data in the demo is the built-in fake DEMO collection.
 
 > **Disclaimer.** Not affiliated with, endorsed by, or sponsored by X Corp. X is a trademark of X Corp. Users must supply their own X API credentials and comply with the [X Developer Agreement and Policy](https://developer.x.com/en/developer-terms/agreement-and-policy).
 
-> **License:** [MIT](LICENSE). Copyright (c) 2026 Michael Sandborn.
+More docs: [docs/FEATURES.md](docs/FEATURES.md) (feature behavior), [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (always-on Mac service), [docs/PRODUCT.md](docs/PRODUCT.md), [AGENTS.md](AGENTS.md) (rules for coding agents).
 
-Detailed feature behavior lives in [docs/FEATURES.md](docs/FEATURES.md). Operating the always-on Mac service: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Product direction and history: [docs/PRODUCT.md](docs/PRODUCT.md), [docs/LAUNCH.md](docs/LAUNCH.md), [docs/HANDOFF.md](docs/HANDOFF.md). Rules for coding agents: [AGENTS.md](AGENTS.md).
+## Prerequisites
+
+| Tool | Version | How to get it |
+| --- | --- | --- |
+| Node.js | **22.13+** for development (`.nvmrc` pins 22); **24.15+** for always-on mode | `nvm install && nvm use` |
+| pnpm | **10.x** (pinned via `packageManager` in `package.json`) | `corepack enable` |
+| git | any recent | your OS package manager |
+| X developer app | needed only to import *your* bookmarks | see [Connecting X](#connecting-x) |
+| xAI API key | optional (Grok features) | [console.x.ai](https://console.x.ai) |
+
+macOS, Linux, and Windows (WSL) work for development. Always-on mode is macOS-only.
+
+## Quickstart
+
+Copy-paste this. No credentials are needed to see the app: it starts with a built-in, clearly labeled **DEMO** collection.
+
+```bash
+git clone https://github.com/sandbornm/stimgraph.git
+cd stimgraph
+nvm use                          # optional if you already run Node 22.13+
+corepack enable                  # provides the pinned pnpm
+pnpm run setup                   # checks prereqs, creates .env.local from .env.example
+pnpm install --frozen-lockfile
+pnpm dev                         # http://127.0.0.1:3001
+```
+
+`pnpm run setup` (equivalently `node scripts/setup.mjs`) never overwrites an existing `.env.local` and never prints its contents. Dependency install scripts are disabled by `.npmrc`; that is intentional.
+
+To import your own bookmarks, fill in `X_CLIENT_ID` and `X_CLIENT_SECRET` in `.env.local`, restart `pnpm dev`, open the app, and press **Connect X**.
 
 ## Two ways to run it
 
@@ -20,31 +54,20 @@ Detailed feature behavior lives in [docs/FEATURES.md](docs/FEATURES.md). Operati
 | Bookmark import | When you press Sync, plus a visible tab checks the newest 15 every 90 s | Background poll every 6 h, plus a one-time backfill |
 | Agent link | Requires your browser session | `https://<host>.<tailnet>.ts.net/agents` from your tailnet |
 
-## Quick start (development mode)
+## Connecting X
 
-Prerequisites:
-
-1. **Node 22.13+** (`nvm use` reads `.nvmrc`) and **pnpm 10** (`corepack enable`; the version is pinned in `package.json`).
-2. **Your own X developer app.** Create one in the [X Developer Console](https://console.x.com/). X API access is paid and its plans/pricing change; check the console before relying on it. Every bookmark sync, follow import, and background poll consumes X reads billed to *your* app.
+1. **Create your own X developer app** in the [X Developer Console](https://console.x.com/). X API access is paid and its plans/pricing change; check the console before relying on it. Every bookmark sync, follow import, and background poll consumes X reads billed to *your* app.
    - Type: confidential **Web App, Automated App or Bot**. Permissions: **Read**.
    - OAuth 2.0 scopes requested by Stimgraph (exactly): `tweet.read users.read bookmark.read follows.read offline.access`. No write scopes.
    - Callback URL (must match `X_REDIRECT_URI` exactly):
      - Development: `http://127.0.0.1:3001/api/auth/x/callback`
      - Always-on: `https://<host>.<tailnet>.ts.net/api/auth/x/callback`
    - Website URL: any public page you own (it is only a label).
-3. **Optional: an xAI API key** for Grok topic enrichment, scouting, bridges, and research drafts. Everything else works without it.
-
-Then:
-
-```bash
-cp .env.example .env.local   # fill in values yourself; never commit or paste this file
-pnpm install --ignore-scripts
-pnpm dev                      # http://127.0.0.1:3001
-```
-
-Open the app and press **Connect X**. Before you connect, the app shows a built-in **demo collection** (labeled DEMO, fake accounts and posts) so you can try the interface; your data replaces it once connected in that browser.
+2. **Optional: an xAI API key** for Grok topic enrichment, scouting, bridges, and research drafts. Everything else works without it.
 
 ## Environment variables
+
+All variables are listed, with comments, in [.env.example](.env.example). For development, `pnpm run setup` copies it to `.env.local` (gitignored); edit values there and never commit or paste that file.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -134,11 +157,33 @@ Stimgraph does not replace either. It is a **local, persistent store** of your b
 
 A reasonable pattern: use the assistant's X access for live or public lookups, and point it at Stimgraph for "what have I saved about…" questions.
 
-## Checks
+## Run, test, and deploy
 
 ```bash
+pnpm dev              # development server, http://127.0.0.1:3001
 pnpm run check        # typecheck + lint + unit tests
-pnpm run build:local  # Next.js production build
+pnpm run build:local  # Next.js production build (no credentials needed)
+pnpm run start:local  # serve that build on 127.0.0.1:3001
 ```
 
 CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLite integration test on Node 24, and a gitleaks history scan. Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+**Deploy:** there is no hosted version. The supported deployment is the private always-on Mac service (Tailscale Serve + launchd) in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Do not expose the server on a public interface; its auth model assumes loopback + Tailscale.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `pnpm: command not found` | `corepack enable`, then open a new shell. |
+| `Unsupported engine` / syntax errors on start | Node is too old. `nvm use` (needs 22.13+; 24.15+ for always-on). |
+| `Port 3001 is already in use` | Another dev server is running. Stop it, or `lsof -i :3001` to find it. The port is fixed because the X callback URL must match exactly. |
+| X login fails with a callback / redirect error | `X_REDIRECT_URI` in `.env.local` must match the callback URL in your X app **character for character** (use `127.0.0.1`, not `localhost`). |
+| App still shows DEMO after connecting | Sync runs on request: press **Sync**. X only returns your newest ~800 bookmarks. |
+| Every request after a change says "reconnect" | You changed `X_CLIENT_SECRET`; stored tokens are encrypted with it. Press Connect X again. |
+| Grok buttons disabled | `XAI_API_KEY` is empty. That is fine; everything else works. |
+| `pnpm install` warns that build scripts were ignored | Expected: `.npmrc` sets `ignore-scripts=true`. |
+| Weird state after pulling new commits | Stop the server, `rm -rf .wrangler`, `pnpm install --frozen-lockfile`, `pnpm dev`. This resets local dev data. |
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Michael Sandborn.
