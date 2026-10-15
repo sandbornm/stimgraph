@@ -176,12 +176,13 @@ CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLit
 | --- | --- |
 | `pnpm: command not found` | `corepack enable`, then open a new shell. |
 | `Unsupported engine` / syntax errors on start | Node is too old. `nvm use` (needs 22.13+; 24.15+ for always-on). |
-| `Port 3001 is already in use` | Another dev server is running. Stop it, or `lsof -i :3001` to find it. The port is fixed because the X callback URL must match exactly. |
+| `Port 3001 is already in use` | Something else (often the always-on service) is listening. Stop it (`lsof -i :3001`), or for a quick DEMO-only look use `pnpm dev --port 3013`. Connecting X needs port 3001, because the callback URL must match exactly. |
 | X login fails with a callback / redirect error | `X_REDIRECT_URI` in `.env.local` must match the callback URL in your X app **character for character** (use `127.0.0.1`, not `localhost`). |
 | App still shows DEMO after connecting | Sync runs on request: press **Sync**. X only returns your newest ~800 bookmarks. |
 | Every request after a change says "reconnect" | You changed `X_CLIENT_SECRET`; stored tokens are encrypted with it. Press Connect X again. |
-| Grok buttons disabled | `XAI_API_KEY` is empty. That is fine; everything else works. |
+| Grok actions fail or say they are not configured | `XAI_API_KEY` is empty. That is fine; everything else works. |
 | `pnpm install` warns that build scripts were ignored | Expected: `.npmrc` sets `ignore-scripts=true`. |
+| `pnpm run typecheck` errors in `.next/types` after a build | Stale generated types: `rm -rf .next` and re-run. |
 | Weird state after pulling new commits | Stop the server, `rm -rf .wrangler`, `pnpm install --frozen-lockfile`, `pnpm dev`. This resets local dev data. |
 
 ## License
