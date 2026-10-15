@@ -1,7 +1,12 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
+import { existsSync } from 'node:fs';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
+
+// Optional hosted-preview config. It holds a hosting project ID, so it is
+// gitignored; the `sites` plugin is enabled only when the file exists locally.
+const hasHostingConfig = existsSync('./.openai/hosting.json');
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -57,7 +62,7 @@ export default defineConfig(async () => {
     },
     plugins: [
       vinext(),
-      sites(),
+      ...(hasHostingConfig ? [sites()] : []),
       cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
         config: localBindingConfig,

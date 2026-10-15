@@ -22,3 +22,6 @@ dist/
 tsconfig.tsbuildinfo
 .wrangler/
 .tailnet/
+
+# Hosting project config (contains a project ID; keep local)
+.openai/hosting.json
