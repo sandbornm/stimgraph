@@ -11,7 +11,16 @@ export type TableRow = {
   createdAt: string | null;
   url: string;
   topics: TableTopic[];
+  /** Why it was saved (Jev): try | read | reference | inspiration; null when unlabeled or unsure. */
+  intent?: Intent | null;
+  /** true = time-bound news that went stale, false = still actionable, null = unknown. */
+  stale?: boolean | null;
 };
+
+export const INTENTS = ['try', 'read', 'reference', 'inspiration'] as const;
+export type Intent = (typeof INTENTS)[number];
+export const asIntent = (value: unknown): Intent | null => (INTENTS as readonly unknown[]).includes(value) ? value as Intent : null;
+export const asStale = (value: unknown): boolean | null => value === 1 || value === true ? true : value === 0 || value === false ? false : null;
 
 export type TopicCount = TableTopic & { count: number };
 
@@ -59,14 +68,27 @@ export function topicCounts(rows: TableRow[]): TopicCount[] {
   return [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
-export type TableFilter = { q?: string; topics?: string[]; author?: string };
+export function intentCounts(rows: TableRow[]) {
+  return INTENTS.map((id) => ({ id, count: rows.filter((row) => row.intent === id).length })).filter((c) => c.count > 0);
+}
+
+/** stale: 'include' (default, all rows), 'hide' (drop rows flagged stale), 'only' (just stale rows). */
+export type StaleMode = 'include' | 'hide' | 'only';
+export const asStaleMode = (value: string | null | undefined): StaleMode => value === 'hide' || value === 'only' ? value : 'include';
+
+export type TableFilter = { q?: string; topics?: string[]; author?: string; intents?: string[]; stale?: StaleMode };
 
 export function filterRows(rows: TableRow[], filter: TableFilter): TableRow[] {
   const terms = (filter.q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const topics = (filter.topics ?? []).filter(Boolean);
   const author = (filter.author ?? '').replace(/^@/, '').toLowerCase();
-  if (!terms.length && !topics.length && !author) return rows;
+  const intents = (filter.intents ?? []).map((i) => i.toLowerCase()).filter(Boolean);
+  const stale = filter.stale ?? 'include';
+  if (!terms.length && !topics.length && !author && !intents.length && stale === 'include') return rows;
   return rows.filter((row) => {
+    if (stale === 'hide' && row.stale === true) return false;
+    if (stale === 'only' && row.stale !== true) return false;
+    if (intents.length && !intents.includes(row.intent ?? '')) return false;
     if (author && row.handle.toLowerCase() !== author) return false;
     if (topics.length && !topics.every((id) => row.topics.some((t) => t.id === id || t.label.toLowerCase() === id.toLowerCase()))) return false;
     if (!terms.length) return true;
@@ -113,15 +135,18 @@ export function rowsFromGraph(nodes: GraphLikeNode[], edges: GraphLikeEdge[]): T
       createdAt: dateMatch ? new Date(`1 ${dateMatch}`).toISOString() : null,
       url: node.url ?? '',
       topics: topicsFor.get(node.id) ?? [],
+      intent: null,
+      stale: null,
     };
   });
 }
 
 export function rowsToMarkdown(rows: TableRow[]) {
   const esc = (v: string) => v.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
-  const lines = ['| Date | Author | Post | Topics |', '| --- | --- | --- | --- |'];
+  const lines = ['| Date | Author | Post | Topics | Why saved | Stale |', '| --- | --- | --- | --- | --- | --- |'];
   for (const row of rows) {
-    lines.push(`| ${row.createdAt?.slice(0, 10) ?? ''} | @${esc(row.handle)} | [${esc(row.text).slice(0, 160)}](${row.url}) | ${row.topics.map((t) => esc(t.label)).join(', ')} |`);
+    const stale = row.stale === true ? 'stale' : row.stale === false ? 'actionable' : '';
+    lines.push(`| ${row.createdAt?.slice(0, 10) ?? ''} | @${esc(row.handle)} | [${esc(row.text).slice(0, 160)}](${row.url}) | ${row.topics.map((t) => esc(t.label)).join(', ')} | ${row.intent ?? ''} | ${stale} |`);
   }
   return `${lines.join('\n')}\n`;
 }

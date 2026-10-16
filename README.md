@@ -90,13 +90,13 @@ The always-on variables are written into the LaunchAgent by `scripts/install-tai
 
 ## Optional: Jev topic labeling (TypeSafe AI)
 
-If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.TYPESAFE_API_KEY`, account `stimgraph`, in always-on mode), Stimgraph asks [Jev](https://docs.typesafe.ai) one *Choice* question per bookmark: which topic from your list fits best.
+If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.TYPESAFE_API_KEY`, account `stimgraph`, in always-on mode), Stimgraph sends [Jev](https://docs.typesafe.ai) one request per bookmark with three *Choice* questions: which topic from your list fits best, **why you saved it** (`try`, `read`, `reference`, `inspiration`), and whether it is still **actionable or stale** (time-bound news that has likely gone out of date).
 
 - **Topic list:** editable per owner via `GET`/`PUT /api/jev` (`{ "topics": { "label": "description", ... } }`, up to 255). The default is agents, openai, claude, models, code, security, crypto-payments, design, startups, other.
-- **Once per post:** the label, confidence, and model version are cached in `jev_labels`. A post is relabeled only if its text or the topic list changes.
+- **Once per post:** the label, intent, stale flag, confidences and model version are cached in `jev_labels` (migration `0007` adds the nullable intent/stale columns; posts labeled before it get intent/stale once on the next run). A post is relabeled only if its text or the topic list changes.
 - **When:** new bookmarks are labeled after each sync (up to 200 per run). Label existing ones once with `STIMGRAPH_URL=https://<host>.<tailnet>.ts.net pnpm jev:label` (or `http://127.0.0.1:3001` in development, signed in).
-- **Fallback:** answers below 0.5 confidence or "other" add no Jev topic, so keyword chips apply.
-- **UI:** Jev topics appear as chips marked ◆ (ids start with `jev-`); keyword chips are dashed.
+- **Fallback:** answers below 0.5 confidence or "other" add no Jev topic, so keyword chips apply. Intent or stale answers below 0.5 are stored as `null` (unknown).
+- **UI:** one screen: search box, a row of why-saved chips and topic chips (click to filter), and the table. Posts flagged stale are hidden by default; the "Show stale" toggle brings them back. Explore, Globe, People, Topics and the other views live behind **More** in the left rail. Jev topics appear as chips marked ◆ (ids start with `jev-`); keyword chips are dashed.
 - **Data sent:** the post text (first 4,000 characters), the author handle, and your topic list. No X credentials. Requests run 4 at a time and retry `429`/`5xx` with backoff.
 - **Cost:** Jev bills input tokens only. At the published price when this was written (about $0.042 per million input tokens) a typical request is ~600 tokens, so labeling 800 bookmarks costs on the order of $0.02. Check TypeSafe's current [models and pricing](https://docs.typesafe.ai/models) page.
 
@@ -140,7 +140,7 @@ The app exposes separate controls to disconnect the browser session or delete th
 
 ## Agent access (read-only)
 
-Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. No MCP server or install is needed; any agent that can fetch a URL on your tailnet can use it.
+Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&intent=&stale=&limit=` (each bookmark carries `intent` and `stale`; `intent=try&stale=hide` gives a short to-try list), `/api/agent/topics`, `/api/agent/export?format=md|json` (same filters). No MCP server or install is needed; any agent that can fetch a URL on your tailnet can use it.
 
 ### How this fits with agents that already read X
 
