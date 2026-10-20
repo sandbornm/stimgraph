@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { clampLimit, filterRows, keywordTopics, rowsFromGraph, rowsToMarkdown, topicCounts, type TableRow } from './bookmark-table.ts';
+import { asIntent, asStale, asStaleMode, clampLimit, filterRows, intentCounts, keywordTopics, rowsFromGraph, rowsToMarkdown, topicCounts, type TableRow } from './bookmark-table.ts';
 
 const row = (id: string, text: string, topics: TableRow['topics'] = [], handle = 'ada'): TableRow => ({ id, author: 'Ada', handle, text, createdAt: '2026-01-02T00:00:00Z', url: `https://x.com/${handle}/status/${id}`, topics });
 
@@ -54,5 +54,44 @@ describe('bookmark table', () => {
     assert.equal(rows[0].handle, 'ada');
     assert.deepEqual(rows[0].topics, [{ id: 'ml', label: 'ML' }]);
     assert.match(rowsToMarkdown(rows), /full \\\| text/);
+  });
+});
+
+describe('why-saved intent and stale flag', () => {
+  const rows: TableRow[] = [
+    { ...row('1', 'try this cli'), intent: 'try', stale: false },
+    { ...row('2', 'launch news'), intent: 'read', stale: true },
+    { ...row('3', 'unlabeled'), intent: null, stale: null },
+  ];
+  it('filters by intent and stale mode', () => {
+    assert.deepEqual(filterRows(rows, { intents: ['try'] }).map((r) => r.id), ['1']);
+    assert.deepEqual(filterRows(rows, { intents: ['TRY', 'read'] }).map((r) => r.id), ['1', '2']);
+    assert.deepEqual(filterRows(rows, { stale: 'hide' }).map((r) => r.id), ['1', '3'], 'unknown stays visible');
+    assert.deepEqual(filterRows(rows, { stale: 'only' }).map((r) => r.id), ['2']);
+    assert.equal(filterRows(rows, { stale: 'include' }).length, 3);
+    assert.deepEqual(filterRows(rows, { intents: ['try'], stale: 'hide' }).map((r) => r.id), ['1']);
+  });
+  it('counts intents and parses stored values', () => {
+    assert.deepEqual(intentCounts(rows), [{ id: 'try', count: 1 }, { id: 'read', count: 1 }]);
+    assert.equal(asIntent('reference'), 'reference');
+    assert.equal(asIntent('weather'), null);
+    assert.equal(asIntent(null), null);
+    assert.equal(asStale(1), true);
+    assert.equal(asStale(0), false);
+    assert.equal(asStale(null), null);
+    assert.equal(asStaleMode('hide'), 'hide');
+    assert.equal(asStaleMode('bogus'), 'include');
+    assert.equal(asStaleMode(null), 'include');
+  });
+  it('exports why-saved and stale columns in Markdown', () => {
+    const md = rowsToMarkdown(rows);
+    assert.match(md, /\| Why saved \| Stale \|/);
+    assert.match(md, /\| try \| actionable \|/);
+    assert.match(md, /\| read \| stale \|/);
+  });
+  it('graph rows have unknown intent and stale', () => {
+    const [r] = rowsFromGraph([{ id: 'bookmark:9', kind: 'source', label: 'x' }], []);
+    assert.equal(r.intent, null);
+    assert.equal(r.stale, null);
   });
 });
