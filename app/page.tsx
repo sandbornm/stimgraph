@@ -2768,12 +2768,12 @@ export default function Home() {
         <aside className="left-rail" aria-label="Graph navigation">
           <nav>
             <button className={`rail-item ${view === 'table' ? 'active' : ''}`} type="button" onClick={() => enterView('table')}><span>☰</span>Bookmarks</button>
+            <details className="rail-more" open={view !== 'table' || tuningOpen || guideIndex >= 0 ? true : undefined}>
+            <summary className="rail-item"><span>⋯</span>More</summary>
             <button className={`rail-item ${view === 'explore' ? 'active' : ''}`} type="button" onClick={() => enterView('explore')}><span>✧</span>Explore</button>
             <button className={`rail-item ${view === 'map' && !tuningOpen ? 'active' : ''}`} type="button" onClick={() => enterView('map')}><span>◎</span>Globe</button>
             <button className={`rail-item ${view === 'people' ? 'active' : ''}`} type="button" onClick={() => enterView('people')}><span>◎</span>People</button>
             <button className={`rail-item ${view === 'threads' ? 'active' : ''}`} type="button" onClick={() => enterView('threads')}><span>↝</span>Topics</button>
-            <details className="rail-more">
-            <summary className="rail-item"><span>⋯</span>More</summary>
             <button className={`rail-item ${view === 'bookmarks' ? 'active' : ''}`} type="button" onClick={() => enterView('bookmarks')}><span>✦</span>Saved posts</button>
             <button className={`rail-item ${view === 'scout' ? 'active' : ''}`} type="button" onClick={() => enterView('scout')}><span>⬡</span>Scout</button>
             <button className={`rail-item ${view === 'feeds' ? 'active' : ''}`} type="button" onClick={() => enterView('feeds')}><span>⇉</span>Feeds</button>
