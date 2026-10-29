@@ -22,7 +22,6 @@ const ciphertext = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, 
 })));
 db.prepare('INSERT INTO x_sessions VALUES (?, ?, ?, ?, ?, ?)').run('fixture-session', 'fixture-owner',
   `${Buffer.from(iv).toString('base64url')}.${Buffer.from(ciphertext).toString('base64url')}`, Date.now() + 86400_000, Date.now(), Date.now());
-// Simulate an install whose one-time backfill already ran, so the regular capped poll and catch-up are exercised.
 db.prepare('INSERT INTO bookmark_sync_state(owner_id, backfill_completed_at) VALUES (?, ?)').run('fixture-owner', 1);
 const origin = 'https://fixture.example.ts.net';
 const headers = { Host: 'fixture.example.ts.net', 'Tailscale-User-Login': 'owner@example.invalid', 'X-Forwarded-Proto': 'https' };
@@ -31,7 +30,7 @@ let output = '';
 const request = (path, extra = {}, options = {}) => fetch(`http://127.0.0.1:3012${path}`, { ...options, headers: { ...headers, ...extra } });
 async function waitFor(check) {
   for (let i = 0; i < 100; i++) {
-    try { if (await check()) return; } catch { /* Waiting for startup. */ }
+    try { if (await check()) return; } catch { }
     await new Promise((done) => setTimeout(done, 100));
   }
   throw new Error(`Local production test timed out: ${output}`);
@@ -58,7 +57,6 @@ try {
   await start();
   await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n === 100
     && db.prepare('SELECT status FROM bookmark_sync_state').get()?.status === 'ok');
-  // Jev labels every new bookmark once; even ids get a confident "code" topic, odd ones fall back.
   await waitFor(() => db.prepare('SELECT COUNT(*) AS n FROM jev_labels').get().n === 100);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM bookmark_topics WHERE source = 'jev' AND topic_id = 'jev-code'").get().n, 50);
   const firstLabeledAt = db.prepare('SELECT MAX(labeled_at) AS t FROM jev_labels').get().t;
@@ -92,7 +90,6 @@ try {
   assert.equal(rest.events.length, 65);
   assert.equal(rest.sync.catchingUp, 0);
   assert.equal(new Set([...first.events, ...rest.events].map((event) => event.postId)).size, 125);
-  // One-time backfill: pages past overlap, keeps the same 125 posts, and records completion.
   await stop();
   db.prepare('UPDATE bookmark_sync_state SET next_poll_at = 0, backfill_completed_at = NULL').run();
   await start();

@@ -1,5 +1,3 @@
-// A small adapter for the D1 prepare/batch API used by this app. SQLite remains
-// local; production does not run a Cloudflare development emulator.
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';

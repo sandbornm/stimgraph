@@ -187,7 +187,6 @@ export async function ensureSchema() {
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_x_sessions_owner ON x_sessions(owner_id)'),
   ]);
-  // Additive column for the one-time bookmark backfill; ignore if it already exists.
   try {
     await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
   } catch (error) {
@@ -237,7 +236,6 @@ export async function replaceXSessionRecord(id: string, ownerId: string, payload
 export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
   await ensureSchema();
   const now = Date.now();
-  // Do not resurrect a session that was disconnected while a refresh was running.
   await getD1().prepare(`UPDATE x_sessions SET payload = ?, expires_at = ?, updated_at = ?
     WHERE id = ? AND owner_id = ?`).bind(payload, expiresAt, now, id, ownerId).run();
 }
@@ -345,8 +343,6 @@ export async function storeBookmarks({
         ),
     );
 
-    // The timestamp is when this app first saw the bookmark, never the post date.
-    // Unique ownership/post keys make repeats and concurrent imports idempotent.
     statements.push(d1.prepare(`INSERT OR IGNORE INTO bookmark_observations
       (owner_id, post_id, observed_at) VALUES (?, ?, ?)`)
       .bind(owner.id, bookmark.postId, now));
@@ -872,7 +868,6 @@ export type BookmarkTableData = {
   total: number;
 };
 
-/** Read-only flat bookmark list with topic labels for the table and agent API. */
 export async function loadBookmarkTable(ownerId: string, limit = 2000): Promise<BookmarkTableData> {
   await ensureSchema();
   const d1 = getD1();
@@ -894,7 +889,6 @@ export async function loadBookmarkTable(ownerId: string, limit = 2000): Promise<
   };
 }
 
-/** The single connected account, used for tailnet agent reads when no browser cookie is present. */
 export async function loadSoleAccountId(): Promise<string | null> {
   await ensureSchema();
   const result = await getD1().prepare('SELECT id FROM accounts ORDER BY updated_at DESC LIMIT 2').all();
