@@ -1,4 +1,3 @@
-// Kept separate from db/jev.ts to avoid an import cycle with db/storage.ts.
 export const JEV_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS jev_topic_config (
     owner_id TEXT PRIMARY KEY NOT NULL, topics_json TEXT NOT NULL, updated_at INTEGER NOT NULL

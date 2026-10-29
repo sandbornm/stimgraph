@@ -15,7 +15,6 @@ import {
 } from '@/lib/graph-model';
 import { readNdjson } from '@/lib/read-ndjson';
 import { BookmarkTable } from './bookmark-table';
-// Heavier visualizers load on demand so the default table view paints fast.
 const ExploreGraph = lazy(() => import('./explore-graph').then((m) => ({ default: m.ExploreGraph })));
 const TrajectoryWorkbench = lazy(() => import('./trajectory-workbench').then((m) => ({ default: m.TrajectoryWorkbench })));
 import { buildExploreIndex, connectionReason, exploreConnections, pruneExploreTrail, visitExploreTrail, type ExploreOrientation, type ExploreTrail } from '@/lib/explore-model';
@@ -1894,7 +1893,6 @@ export default function Home() {
     const url = new URL(window.location.href);
     const auth = url.searchParams.get('auth');
     if (auth !== 'invalid' && auth !== 'failed' && auth !== 'connected') return;
-    // Apply the browser-only callback result after the first render has hydrated.
     const frame = window.requestAnimationFrame(() => {
       setSyncState(auth === 'connected' ? 'idle' : 'error');
       setSyncMessage(auth === 'invalid'
@@ -2019,7 +2017,6 @@ export default function Home() {
                 if (!cancelled) setFeeds(payload.feeds ?? []);
               })
               .catch(() => {
-                // RSS is optional; the map already painted.
               });
           }, 0);
         }
@@ -2103,7 +2100,6 @@ export default function Home() {
     try {
       watch = window.localStorage.getItem('stimgraph:liveWatch') === '1';
     } catch {
-      // Preference is optional.
     }
     const frame = window.requestAnimationFrame(() => {
       setTuning(savedTuning);
@@ -2121,7 +2117,6 @@ export default function Home() {
     try {
       window.localStorage.setItem('stimgraph:tuning', JSON.stringify(tuning));
     } catch {
-      // Device preferences are optional; the graph still works without them.
     }
   }, [prefsReady, tuning]);
 
@@ -2131,7 +2126,6 @@ export default function Home() {
     try {
       window.localStorage.setItem('stimgraph:theme', theme);
     } catch {
-      // Theme still applies for this session if storage is blocked.
     }
   }, [theme, themeReady]);
 
@@ -2140,7 +2134,6 @@ export default function Home() {
     try {
       window.localStorage.setItem('stimgraph:liveWatch', liveWatch ? '1' : '0');
     } catch {
-      // Preference is optional.
     }
   }, [liveWatch, liveWatchReady]);
 
@@ -2234,7 +2227,6 @@ export default function Home() {
           latestCursor = result.latestCursor;
         }
       } catch {
-        // A temporary failure is retried without making a second X poller.
       } finally { busy = false; }
     };
     void refresh();

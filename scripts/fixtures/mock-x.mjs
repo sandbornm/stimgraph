@@ -1,4 +1,3 @@
-// Preload for the isolated Node production test only. Never enabled by launchd.
 import { readFileSync } from 'node:fs';
 if (process.env.X_CLIENT_ID !== 'stimgraph-local-test' || !process.env.STIMGRAPH_TEST_SCENARIO) {
   throw new Error('Mock provider requires the isolated test environment.');
@@ -18,7 +17,6 @@ globalThis.fetch = async (input, init) => {
     meta: { next_token: offset + size < scenario.count ? String(offset + size) : undefined } });
   }
   if (url.hostname === 'api.typesafe.ai') {
-    // Synthetic Jev: even post ids -> "code" (confident), odd -> "other" (low confidence).
     const body = JSON.parse(init.body);
     const id = Number(String(body.state.post).match(/(\d+)$/)?.[1] ?? 0);
     const choice = id % 2 === 0 ? 'code' : 'other';

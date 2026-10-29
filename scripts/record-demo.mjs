@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Silent product walkthrough. Captions are burned in via .demo-caption.
- * Pair with public/stimgraph.context.json — that file is the agent-readable marble.
- */
 import { spawn } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -12,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'public', 'demo');
 const videoDir = path.join(outDir, '.pw');
-// Set these to a local Chrome/Chromium binary and a playwright-core install.
 const chromeBin = process.env.STIMGRAPH_CHROME_BIN;
 const playwrightCore = process.env.STIMGRAPH_PLAYWRIGHT_CORE;
 if (!chromeBin || !playwrightCore) throw new Error('Set STIMGRAPH_CHROME_BIN and STIMGRAPH_PLAYWRIGHT_CORE.');

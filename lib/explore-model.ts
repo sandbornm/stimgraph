@@ -64,7 +64,7 @@ export function exploreForwardConnections(index: ExploreIndex, id: string, trail
 
 export function exploreStarts(index: ExploreIndex, kind: 'topic' | 'source'): ExploreNode[] {
   return [...index.nodes.values()].filter((node) => node.kind === kind).sort((a, b) => {
-    if (kind === 'source') return 0; // Preserve the bookmark order supplied by the graph.
+    if (kind === 'source') return 0;
     return exploreConnections(index, b.id).length - exploreConnections(index, a.id).length
       || a.label.localeCompare(b.label);
   });
@@ -79,7 +79,6 @@ export function connectionReason(from: ExploreNode, to: ExploreNode, edge: Graph
   return 'Connected through saved posts';
 }
 
-/** Show an actual next edge, without circling back or repeating another branch. */
 export function explorePreview(index: ExploreIndex, fromId: string, excluded: Set<string>, includeScout = false, preferredId?: string) {
   const candidates = exploreConnections(index, fromId, includeScout).filter(({ node }) =>
     !excluded.has(node.id) && !node.self && node.id !== 'person:self');
@@ -97,7 +96,6 @@ export function visitExploreTrail(trail: ExploreTrail, ids: string[]): ExploreTr
   return { steps: bounded, cursor: bounded.length - 1 };
 }
 
-/** Keep existing branches in place and append newly discovered neighbors. */
 export function reconcileExploreOrder(previous: string[], next: string[]): string[] {
   const available = new Set(next);
   const kept = previous.filter((id) => available.delete(id));

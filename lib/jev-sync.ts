@@ -5,7 +5,6 @@ export function jevEnabled() {
   return Boolean(getRuntimeValue('TYPESAFE_API_KEY'));
 }
 
-/** Best-effort labeling of new bookmarks after a sync. Never throws; logs counts only. */
 export async function labelAfterSync(ownerId: string, limit = 200) {
   const apiKey = getRuntimeValue('TYPESAFE_API_KEY');
   if (!apiKey) return null;

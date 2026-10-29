@@ -1,4 +1,3 @@
-// Run only against an isolated preview on port 3012 using this inert test secret.
 import assert from 'node:assert/strict';
 import { webcrypto, randomUUID } from 'node:crypto';
 
@@ -37,7 +36,6 @@ const draft = {
   ],
 };
 
-// Verify the server accepts only the fixture credentials before any data writes.
 for (const [owner, cookie] of [[ownerA, cookieA], [ownerB, cookieB]]) {
   const response = await request('/api/auth/x/status', cookie);
   const status = await response.json();
