@@ -52,7 +52,8 @@
   "pnpm": {
     "overrides": {
       "miniflare@4>sharp": "^0.35.5",
-      "miniflare@4>undici": "^7.29.1"
+      "miniflare>undici": "^7.30.1",
+      "@tailwindcss/postcss>postcss": "8.5.31"
     }
   }
 }
