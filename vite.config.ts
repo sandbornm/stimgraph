@@ -4,14 +4,11 @@ import { existsSync } from 'node:fs';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 
-// Optional hosted-preview config. It holds a hosting project ID, so it is
-// gitignored; the `sites` plugin is enabled only when the file exists locally.
 const hasHostingConfig = existsSync('./.openai/hosting.json');
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
-// Local bindings only: D1 as `DB`, no R2. No hosting account/project IDs live in this repo.
 const d1: string | null = 'DB';
 const r2: string | null = null;
 
@@ -41,8 +38,6 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
-  // Keep Wrangler and Miniflare state project-local. These are non-secret tool
-  // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
   process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';

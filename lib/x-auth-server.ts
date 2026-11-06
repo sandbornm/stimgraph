@@ -58,13 +58,10 @@ async function refreshStoredSession(session: XSession, sessionId?: string) {
       if (sessionId) await deleteXSessionRecord(sessionId);
       return null;
     }
-    // Network errors and rate limits must not destroy the offline connection.
     throw error;
   }
 }
 
-// A browser refresh and a scheduled poll must not rotate the same refresh token
-// concurrently. The local service runs exactly one worker process.
 const refreshing = new Map<string, Promise<{ session: XSession; renewedCookie?: string } | null>>();
 
 export async function getStoredXSession(id: string) {

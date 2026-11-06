@@ -24,11 +24,6 @@ export async function saveJevTopics(ownerId: string, input: unknown) {
 
 export type JevRunResult = { considered: number; labeled: number; accepted: number; failed: number; skipped: number };
 
-/**
- * Label bookmarks that have no current Jev label. A post is relabeled only when its text
- * or the topic list changed. Accepted labels become `jev-<label>` topics (source 'jev');
- * low-confidence or "other" answers are cached but add no topic, so keyword chips apply.
- */
 export async function labelPendingBookmarks(ownerId: string, apiKey: string, { limit = 1000, fetchImpl }: {
   limit?: number; fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
 } = {}): Promise<JevRunResult> {

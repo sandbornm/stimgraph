@@ -1,6 +1,3 @@
-// One-shot: ask the running Stimgraph server to label all bookmarks that lack a current
-// Jev label. The server holds TYPESAFE_API_KEY; this script never sees it.
-// Usage: STIMGRAPH_URL=https://<host>.<tailnet>.ts.net pnpm jev:label [limit]
 const origin = process.env.STIMGRAPH_URL ?? 'http://127.0.0.1:3001';
 const limit = Number(process.argv[2] ?? 1000);
 const response = await fetch(`${origin}/api/jev`, {

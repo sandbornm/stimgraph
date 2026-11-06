@@ -16,7 +16,6 @@ export type BridgeInterpretation = {
 const BRIDGE_MAX_HOPS = 6;
 const pairKey = (a: string, b: string) => JSON.stringify([a, b].sort());
 
-/** A conceptual link needs a saved post assigned to both topics. */
 export function findConceptBridges(index: ExploreIndex, from: string, to: string): ConceptBridge[] {
   if (from === to || index.nodes.get(from)?.kind !== 'topic' || index.nodes.get(to)?.kind !== 'topic') return [];
   const pairs = new Map<string, string[]>();
@@ -82,7 +81,6 @@ export function bridgeIsAvailable(index: ExploreIndex, route: ConceptBridge): bo
     || index.links.get(route.nodeIds[cursor - 1])?.some(({ node, edge }) => node.id === id && edge.kind === 'evidence')));
 }
 
-/** Send only route concepts and a small set of excerpts, with opaque references. */
 export function bridgePromptContext(index: ExploreIndex, from: string, to: string, routes: ConceptBridge[]) {
   const conceptIds = new Set([from, to, ...routes.flatMap((route) => route.conceptIds)]);
   const refById = new Map([...conceptIds].map((id, position) => [id, `c${position + 1}`]));

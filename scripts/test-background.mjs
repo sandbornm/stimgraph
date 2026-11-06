@@ -1,4 +1,3 @@
-// Run against an isolated production build. All X requests are intercepted.
 import assert from 'node:assert/strict';
 import { Miniflare, Response as MFResponse, Log, LogLevel } from 'miniflare';
 import { mkdtempSync } from 'node:fs';

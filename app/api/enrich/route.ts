@@ -19,7 +19,6 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as { limit?: number };
     if (typeof body.limit === 'number') requestedLimit = body.limit;
   } catch {
-    // The visible consent action uses the conservative default.
   }
   const limit = Math.max(1, Math.min(40, Math.floor(requestedLimit)));
   const bookmarks = await loadBookmarksForEnrichment(active.session.profile.id, limit);

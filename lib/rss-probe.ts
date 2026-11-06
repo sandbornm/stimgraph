@@ -155,7 +155,6 @@ export async function probeOrigin(origin: string): Promise<FeedProbe> {
             });
           }
         } catch {
-          // Common paths are guesses; a miss is not a probe failure.
         }
       }
     }

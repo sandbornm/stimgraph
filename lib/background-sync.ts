@@ -20,7 +20,6 @@ export async function pollConnectedAccounts() {
     .all<{ id: string; owner_id: string }>();
   for (const stored of sessions.results) {
     await withOwnerWork(stored.owner_id, async () => {
-      // Deletion may have completed after the scheduler took its session snapshot.
       if (!await d1.prepare('SELECT id FROM x_sessions WHERE id = ?').bind(stored.id).first()) return;
       await d1.prepare('INSERT OR IGNORE INTO bookmark_sync_state(owner_id) VALUES (?)').bind(stored.owner_id).run();
       const claimed = await d1.prepare(`UPDATE bookmark_sync_state
@@ -38,8 +37,6 @@ export async function pollConnectedAccounts() {
             next_poll_at = ? WHERE owner_id = ?`).bind(now + POLL_INTERVAL_MS, stored.owner_id).run();
           return;
         }
-        // Most polls read one page and stop at overlap. Until the one-time backfill
-        // completes, page past overlap through X's newest ~800 bookmarks instead.
         const backfill = claimed.backfill_completed_at == null;
         let backfillDone = false;
         let calls = 0;
@@ -56,7 +53,6 @@ export async function pollConnectedAccounts() {
           backfillDone = step.backfillDone;
           if (step.stop) break;
         }
-        // The iterator also ends when the limit is reached; that completes a backfill too.
         if (backfill && !continuation) backfillDone = true;
         if (backfill) console.info(`[stimgraph] bookmark backfill ${backfillDone ? 'completed' : 'paused'}: ${fetched} fetched in ${calls} X calls`);
         await d1.prepare(`UPDATE bookmark_sync_state SET lease_until = 0, failures = 0,
@@ -69,7 +65,6 @@ export async function pollConnectedAccounts() {
         const failures = claimed.failures + 1;
         const status = error instanceof XRequestError ? `x_${error.status}` : 'temporary_error';
         const retryAt = error instanceof XRequestError ? error.retryAt : 0;
-        // Expired pagination cursors can be restarted at the head on the next attempt.
         if (error instanceof XRequestError && error.status === 400) continuation = null;
         await d1.prepare(`UPDATE bookmark_sync_state SET lease_until = 0, failures = ?,
           next_poll_at = ?, status = ?, fetched = ?, continuation = ? WHERE owner_id = ?`)

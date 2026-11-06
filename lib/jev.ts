@@ -1,5 +1,3 @@
-// Optional topic labeling with Jev (TypeSafe AI). Pure module: no app imports,
-// so it can be unit-tested with a mocked fetch. Enabled only when TYPESAFE_API_KEY is set.
 // API: https://docs.typesafe.ai/api.md
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
@@ -8,9 +6,8 @@ export const JEV_MIN_CONFIDENCE = 0.5;
 export const JEV_CONCURRENCY = 4;
 export const JEV_OTHER = 'other';
 const MAX_OPTIONS = 255;
-const MAX_STATE_CHARS = 4000; // well under the 32k state+question budget
+const MAX_STATE_CHARS = 4000;
 
-/** Editable topic list: label -> short rubric description. `other` is always present. */
 export type JevTopics = Record<string, string>;
 
 export const DEFAULT_JEV_TOPICS: JevTopics = {
@@ -40,7 +37,6 @@ export function normalizeTopics(input: unknown): JevTopics {
   return out;
 }
 
-/** Stable fingerprint so posts are relabeled only when their text or the topic list changes. */
 export async function fingerprint(value: string) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest).slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -74,7 +70,6 @@ export class JevError extends Error {
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-/** One Choice call. Retries 429/5xx with Retry-After or exponential backoff. Never logs the key. */
 export async function labelPost({ apiKey, text, author, topics, fetchImpl = fetch, retries = 3, baseDelayMs = 1000 }: {
   apiKey: string; text: string; author: string; topics: JevTopics; fetchImpl?: FetchLike; retries?: number; baseDelayMs?: number;
 }): Promise<JevAnswer> {
@@ -98,12 +93,10 @@ export async function labelPost({ apiKey, text, author, topics, fetchImpl = fetc
   }
 }
 
-/** Low-confidence or "other" answers produce no Jev topic, so the keyword fallback applies. */
 export function acceptedLabel(answer: Pick<JevAnswer, 'label' | 'confidence'>, threshold = JEV_MIN_CONFIDENCE) {
   return answer.label !== JEV_OTHER && answer.confidence >= threshold ? answer.label : null;
 }
 
-/** Run tasks with bounded concurrency; failures are collected, not thrown. */
 export async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>) {
   const results: Array<{ item: T; value?: R; error?: unknown }> = [];
   let next = 0;

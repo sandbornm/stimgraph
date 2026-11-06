@@ -5,7 +5,6 @@ import { filterRows, rowsToMarkdown } from '@/lib/bookmark-table';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/agent/export?format=md|json&q=&topic=
 export async function GET(request: NextRequest) {
   const owner = await resolveAgentOwner(request);
   if (!owner) return agentDenied();

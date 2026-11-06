@@ -1,4 +1,3 @@
-// Requires the test-only fixture route in a secret-free preview on port 3012.
 import assert from 'node:assert/strict';
 import { webcrypto, randomUUID } from 'node:crypto';
 

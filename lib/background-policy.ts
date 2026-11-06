@@ -18,15 +18,9 @@ export function trustedTailnetLogin(headers: Headers, login: string | undefined)
   return Boolean(login && headers.get('tailscale-user-login') === login);
 }
 
-/** X serves only the newest ~800 bookmarks; a one-time backfill walks all of them. */
 export const BACKFILL_LIMIT = 800;
 export const BACKFILL_PAGE_SIZE = 100;
 
-/**
- * Decide what to do after storing one page. Regular polls stop at the first overlap
- * with stored bookmarks; the one-time backfill keeps paging past overlap until X
- * runs out of pages or the backfill limit is reached.
- */
 export function nextPageStep({ backfill, inserted, received, nextToken, fetched }: {
   backfill: boolean; inserted: number; received: number; nextToken?: string | null; fetched: number;
 }): { continuation: string | null; stop: boolean; backfillDone: boolean } {

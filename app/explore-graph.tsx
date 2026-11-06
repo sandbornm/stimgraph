@@ -31,7 +31,6 @@ const PAGE_SIZE = 5;
 
 export function ExploreGraph(props: Props) {
   const index = useMemo(() => buildExploreIndex(props.nodes, props.edges), [props.nodes, props.edges]);
-  // Remount only the branch controls when the focus changes; the trail lives in Home.
   return <ExploreScene key={`${props.mode}:${props.selectedId ?? 'overview'}`} {...props} index={index} />;
 }
 

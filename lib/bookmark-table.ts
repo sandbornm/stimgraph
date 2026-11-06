@@ -1,6 +1,3 @@
-// Pure helpers for the bookmark table and the read-only agent API.
-// No I/O here so the UI, the agent routes, and tests share one behavior.
-
 export type TableTopic = { id: string; label: string };
 
 export type TableRow = {
@@ -21,7 +18,6 @@ function slugTopic(label: string) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 }
 
-/** Simple keyword clustering fallback for rows that have no stored topics. */
 export function keywordTopics(rows: TableRow[], maxTopics = 12, minCount = 3): TableRow[] {
   const untagged = rows.filter((row) => row.topics.length === 0);
   if (untagged.length === 0) return rows;
@@ -84,7 +80,6 @@ export function clampLimit(value: string | null | undefined, fallback = 50, max 
 type GraphLikeNode = { id: string; kind: string; label: string; note?: string; evidence?: string; url?: string };
 type GraphLikeEdge = { from: string; to: string };
 
-/** Build rows from an in-memory graph (demo/shared mode, no DB). */
 export function rowsFromGraph(nodes: GraphLikeNode[], edges: GraphLikeEdge[]): TableRow[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const topicsFor = new Map<string, TableTopic[]>();

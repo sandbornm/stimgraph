@@ -34,7 +34,6 @@ export function trajectoryName(steps: TrajectoryStep[]): string {
   return (stops.length > 1 ? `${start.slice(0, 52)} → ${end?.slice(0, 52)}` : start).slice(0, 120);
 }
 
-/** Resume only the connected portion ending at the chosen step. */
 export function resumeTrajectory(index: ExploreIndex, steps: TrajectoryStep[], cursor: number): ExploreTrail {
   if (!index.nodes.has(steps[cursor]?.id)) return { steps: [], cursor: -1 };
   let start = cursor;
@@ -47,7 +46,6 @@ export function resumeTrajectory(index: ExploreIndex, steps: TrajectoryStep[], c
 export function trajectoryFrontier(index: ExploreIndex, steps: TrajectoryStep[], visited: Set<string>) {
   const pathIds = new Set(steps.map((step) => step.id));
   const byBookmark = new Map<string, { node: ExploreNode; from: TrajectoryStep; cursor: number }>();
-  // Prefer branches near the current end, and count each saved post only once.
   for (let cursor = steps.length - 1; cursor >= 0; cursor -= 1) {
     const from = steps[cursor];
     for (const { node, edge } of index.links.get(from.id) ?? []) {

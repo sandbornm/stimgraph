@@ -1,4 +1,3 @@
-// Copies source only. Reject secret paths before any filesystem access.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, lstatSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
