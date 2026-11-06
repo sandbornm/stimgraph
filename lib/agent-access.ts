@@ -4,7 +4,7 @@ import { loadBookmarkTable, loadSoleAccountId } from '@/db/storage';
 import { getActiveXSession } from './x-auth-server';
 import { getRuntimeValue } from './runtime-env';
 import { tailnetAgentAllowed } from './agent-gate';
-import { keywordTopics, type TableRow } from './bookmark-table';
+import { asIntent, asStale, keywordTopics, type TableRow } from './bookmark-table';
 
 /**
  * Who may read through /api/agent/*:
@@ -47,6 +47,8 @@ export async function loadAgentRows(ownerId: string): Promise<{ rows: TableRow[]
     createdAt: b.created_at ?? null,
     url: `https://x.com/${b.author_username}/status/${b.post_id}`,
     topics: topicsByPost.get(b.post_id) ?? [],
+    intent: asIntent(b.intent),
+    stale: asStale(b.stale),
   }));
   return { rows: keywordTopics(rows), total: data.total };
 }

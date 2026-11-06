@@ -9,3 +9,11 @@ export const JEV_SCHEMA = [
     PRIMARY KEY (owner_id, post_id)
   )`,
 ];
+
+/** Additive columns from migration 0007 (why-saved intent + actionable/stale). Nullable, so existing rows stay valid. */
+export const JEV_SIGNAL_COLUMNS = [
+  'intent TEXT', 'intent_confidence REAL', 'stale INTEGER', 'stale_confidence REAL', 'signals_at INTEGER',
+];
+
+/** Migration 0008. Nullable unix ms; missing or older than 7 days is refreshed without relabeling topic or intent. */
+export const JEV_STALE_EVAL_COLUMNS = ['stale_evaluated_at INTEGER'];

@@ -13,10 +13,12 @@ const denied = () => NextResponse.json({ error: 'An authenticated owner is requi
 export async function GET(request: NextRequest) {
   const ownerId = await resolveOwnerId(request);
   if (!ownerId) return denied();
-  const counts = await getD1().prepare(`SELECT COUNT(*) AS labeled, SUM(CASE WHEN label != 'other' AND confidence >= 0.5 THEN 1 ELSE 0 END) AS accepted
-    FROM jev_labels WHERE owner_id = ?`).bind(ownerId).first<{ labeled: number; accepted: number | null }>();
+  const counts = await getD1().prepare(`SELECT COUNT(*) AS labeled, SUM(CASE WHEN label != 'other' AND confidence >= 0.5 THEN 1 ELSE 0 END) AS accepted,
+    SUM(CASE WHEN intent IS NOT NULL THEN 1 ELSE 0 END) AS intents, SUM(CASE WHEN stale = 1 THEN 1 ELSE 0 END) AS stale
+    FROM jev_labels WHERE owner_id = ?`).bind(ownerId).first<{ labeled: number; accepted: number | null; intents: number | null; stale: number | null }>();
   return NextResponse.json({ enabled: Boolean(getRuntimeValue('TYPESAFE_API_KEY')), topics: await loadJevTopics(ownerId),
-    labeled: counts?.labeled ?? 0, accepted: counts?.accepted ?? 0 }, { headers });
+    labeled: counts?.labeled ?? 0, accepted: counts?.accepted ?? 0,
+    intents: counts?.intents ?? 0, stale: counts?.stale ?? 0 }, { headers });
 }
 
 /** Replace the topic list: body { topics: { label: description, ... } }. Changing it relabels on the next run. */

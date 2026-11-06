@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { filterRows, keywordTopics, rowsFromGraph, topicCounts, type TableRow } from '@/lib/bookmark-table';
+import { filterRows, intentCounts, keywordTopics, rowsFromGraph, topicCounts, type TableRow } from '@/lib/bookmark-table';
 import type { GraphEdge } from '@/lib/graph-model';
 
 type Props = {
@@ -15,6 +15,7 @@ const PAGE = 100;
 /** Topic source is encoded in the id prefix: jev- (Jev label), kw- (keyword fallback), else hashtag/Grok. */
 const chipSource = (id: string) => (id.startsWith('jev-') ? ' jev' : id.startsWith('kw-') ? ' kw' : '');
 const chipTitle = (id: string) => (id.startsWith('jev-') ? 'Topic labeled by Jev (TypeSafe AI)' : id.startsWith('kw-') ? 'Keyword topic' : 'Hashtag or Grok topic');
+const INTENT_LABEL: Record<string, string> = { try: 'to try', read: 'to read', reference: 'reference', inspiration: 'inspiration' };
 const dateFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
 export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
@@ -22,6 +23,8 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
   const [liveRows, setLiveRows] = useState<TableRow[] | null>(null);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState<string[]>([]);
+  const [intents, setIntents] = useState<string[]>([]);
+  const [showStale, setShowStale] = useState(false);
   const [shown, setShown] = useState(PAGE);
   const deferredQuery = useDeferredValue(query);
 
@@ -36,9 +39,14 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
   }, [live, refreshKey]);
 
   const rows = live && liveRows ? liveRows : graphRows;
-  const filtered = useMemo(() => filterRows(rows, { q: deferredQuery, topics: active }), [rows, deferredQuery, active]);
+  const stale = showStale ? 'include' as const : 'hide' as const;
+  const filtered = useMemo(() => filterRows(rows, { q: deferredQuery, topics: active, intents, stale }), [rows, deferredQuery, active, intents, stale]);
   const chips = useMemo(() => topicCounts(filtered).slice(0, 18), [filtered]);
+  // Intent chip counts ignore the intent filter itself so every option stays visible.
+  const intentChips = useMemo(() => intentCounts(filterRows(rows, { q: deferredQuery, topics: active, stale })), [rows, deferredQuery, active, stale]);
+  const staleCount = useMemo(() => rows.filter((row) => row.stale === true).length, [rows]);
   const toggle = (id: string) => { setShown(PAGE); setActive((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]); };
+  const toggleIntent = (id: string) => { setShown(PAGE); setIntents((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]); };
 
   return (
     <section className="bm-table" aria-label="Bookmarks table">
@@ -47,8 +55,26 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
           type="search" value={query} placeholder="Filter bookmarks, people, topics…" aria-label="Filter bookmarks"
           onChange={(e) => { setShown(PAGE); setQuery(e.target.value); }}
         />
+        {staleCount ? (
+          <label className="bm-stale" title="Posts Jev flagged as time-bound news that has likely gone stale">
+            <input type="checkbox" checked={showStale} onChange={(e) => { setShown(PAGE); setShowStale(e.target.checked); }} />
+            Show stale ({staleCount})
+          </label>
+        ) : null}
         <span className="bm-count">{filtered.length} / {rows.length}</span>
       </div>
+      {intentChips.length || intents.length ? (
+        <div className="bm-chips bm-intents" role="list" aria-label="Why saved">
+          {intentChips.map((c) => (
+            <button key={c.id} type="button" className={`bm-chip intent${intents.includes(c.id) ? ' on' : ''}`} title="Why saved (Jev)" aria-pressed={intents.includes(c.id)} onClick={() => toggleIntent(c.id)}>
+              {INTENT_LABEL[c.id] ?? c.id}<small>{c.count}</small>
+            </button>
+          ))}
+          {intents.filter((id) => !intentChips.some((c) => c.id === id)).map((id) => (
+            <button key={`a-${id}`} type="button" className="bm-chip intent on" onClick={() => toggleIntent(id)}>{INTENT_LABEL[id] ?? id} ×</button>
+          ))}
+        </div>
+      ) : null}
       <div className="bm-chips" role="list">
         {active.map((id) => (
           <button key={`a-${id}`} type="button" className="bm-chip on" onClick={() => toggle(id)}>
@@ -61,9 +87,9 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
       </div>
       <div className="bm-scroll">
         <table>
-          <thead><tr><th>Author</th><th>Post</th><th>Date</th><th>Topics</th></tr></thead>
+          <thead><tr><th>Author</th><th>Post</th><th>Date</th><th>Why</th><th>Topics</th></tr></thead>
           <tbody>
-            {filtered.slice(0, shown).map((row) => <Row key={row.id} row={row} active={active} onTopic={toggle} />)}
+            {filtered.slice(0, shown).map((row) => <Row key={row.id} row={row} active={active} onTopic={toggle} onIntent={toggleIntent} />)}
           </tbody>
         </table>
         {filtered.length > shown ? <button type="button" className="bm-more" onClick={() => setShown((n) => n + PAGE)}>Show {Math.min(PAGE, filtered.length - shown)} more</button> : null}
@@ -73,13 +99,17 @@ export function BookmarkTable({ live, refreshKey, nodes, edges }: Props) {
   );
 }
 
-const Row = memo(function Row({ row, active, onTopic }: { row: TableRow; active: string[]; onTopic: (id: string) => void }) {
+const Row = memo(function Row({ row, active, onTopic, onIntent }: { row: TableRow; active: string[]; onTopic: (id: string) => void; onIntent: (id: string) => void }) {
   const text = row.text.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
   return (
-    <tr>
+    <tr className={row.stale ? 'stale' : undefined}>
       <td className="bm-author"><a href={`https://x.com/${row.handle}`} target="_blank" rel="noreferrer">@{row.handle}</a></td>
       <td className="bm-text"><a href={row.url} target="_blank" rel="noreferrer">{text.length > 180 ? `${text.slice(0, 179)}…` : text || 'Saved post'}</a></td>
       <td className="bm-date">{row.createdAt && !Number.isNaN(Date.parse(row.createdAt)) ? dateFmt.format(new Date(row.createdAt)) : '—'}</td>
+      <td className="bm-why">
+        {row.intent ? <button type="button" className="bm-chip intent" onClick={() => onIntent(row.intent!)}>{INTENT_LABEL[row.intent] ?? row.intent}</button> : null}
+        {row.stale ? <span className="bm-stale-tag" title="Jev: time-bound news, likely stale">stale</span> : null}
+      </td>
       <td className="bm-topics">{row.topics.map((t) => (
         <button key={t.id} type="button" className={`bm-chip${chipSource(t.id)} ${active.includes(t.id) ? 'on' : ''}`} title={chipTitle(t.id)} onClick={() => onTopic(t.id)}>{t.label}</button>
       ))}</td>
