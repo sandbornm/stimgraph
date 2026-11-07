@@ -894,10 +894,13 @@ export async function loadBookmarkTable(ownerId: string, limit = 2000): Promise<
   };
 }
 
-/** The single connected account, used for tailnet agent reads when no browser cookie is present. */
-export async function loadSoleAccountId(): Promise<string | null> {
+/**
+ * The one owner a tailnet read may use when no browser cookie is present.
+ * Accounts and unexpired sessions must name exactly one id. Zero or several deny.
+ */
+export async function loadUnambiguousOwnerId(): Promise<string | null> {
   await ensureSchema();
-  const result = await getD1().prepare('SELECT id FROM accounts ORDER BY updated_at DESC LIMIT 2').all();
-  const rows = result.results as Array<{ id: string }>;
-  return rows.length === 1 ? rows[0].id : null;
+  const owners = await getD1().prepare(`SELECT id FROM accounts UNION SELECT owner_id AS id
+    FROM x_sessions WHERE expires_at > ? LIMIT 2`).bind(Date.now()).all<{ id: string }>();
+  return owners.results.length === 1 ? owners.results[0].id : null;
 }

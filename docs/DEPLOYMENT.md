@@ -112,9 +112,10 @@ corepack pnpm@10.17.1 test
 corepack pnpm@10.17.1 run lint
 corepack pnpm@10.17.1 exec tsc --noEmit
 node scripts/test-local.mjs
+node scripts/test-owner-ambiguity.mjs
 ```
 
-The local integration test needs the Next.js production build and a free loopback port 3012. It tests startup polling without a browser, persistence/catch-up across restart, token refresh, access control, HTTPS cookies/origins, assets, and deletion. The separate `test-background.mjs` tests the Cloudflare build in Miniflare, including rate limits and concurrent refreshes.
+The local integration test needs the Next.js production build and a free loopback port 3012. It tests startup polling without a browser, persistence/catch-up across restart, token refresh, access control, HTTPS cookies/origins, assets, and deletion. `scripts/test-owner-ambiguity.mjs` needs that same build and a free port 3014: one account with a bookmark plus an unexpired session for a different owner must be denied by both `/api/activity` and `/api/agent/bookmarks`. The separate `test-background.mjs` tests the Cloudflare build in Miniflare, including rate limits and concurrent refreshes.
 
 - [Tailscale Serve and identity headers](https://tailscale.com/docs/features/tailscale-serve): loopback binding, private access, header sanitization, tagged devices.
 - [Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve): persistent `--bg` and stopping a port.
