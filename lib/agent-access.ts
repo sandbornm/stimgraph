@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { loadBookmarkTable, loadSoleAccountId } from '@/db/storage';
+import { loadBookmarkTable, loadUnambiguousOwnerId } from '@/db/storage';
 import { getActiveXSession } from './x-auth-server';
 import { getRuntimeValue } from './runtime-env';
 import { tailnetAgentAllowed } from './agent-gate';
@@ -13,6 +13,8 @@ import { keywordTopics, type TableRow } from './bookmark-table';
  *     requests and the Host is the *.ts.net name. If STIMGRAPH_AGENT_LOGINS is set
  *     (comma-separated logins), the caller must be on that list.
  *     Path 2 applies only when STIMGRAPH_TAILNET=true; set STIMGRAPH_AGENT_API=off to disable it.
+ *     The owner is the same fail-closed choice as the activity feed: accounts and
+ *     unexpired sessions must name exactly one id.
  * Responses are read-only and never contain tokens, cookies or secrets.
  */
 export async function resolveAgentOwner(request: NextRequest): Promise<{ ownerId: string; via: 'session' | 'tailnet' } | null> {
@@ -20,7 +22,7 @@ export async function resolveAgentOwner(request: NextRequest): Promise<{ ownerId
   if (active) return { ownerId: active.session.profile.id, via: 'session' };
   if (!tailnetAgentAllowed(request.headers, { tailnet: getRuntimeValue('STIMGRAPH_TAILNET'),
     agentApi: getRuntimeValue('STIMGRAPH_AGENT_API'), logins: getRuntimeValue('STIMGRAPH_AGENT_LOGINS') })) return null;
-  const ownerId = await loadSoleAccountId();
+  const ownerId = await loadUnambiguousOwnerId();
   return ownerId ? { ownerId, via: 'tailnet' } : null;
 }
 
