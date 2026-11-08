@@ -1,5 +1,5 @@
 import type { StoredBookmark } from '@/db/storage';
-import { XRequestError, retryTime } from './x-errors';
+import { XRequestError, retryTime } from './x-errors.ts';
 
 type XPost = {
   id: string;

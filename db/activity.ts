@@ -11,8 +11,9 @@ export const ACTIVITY_SCHEMA = [
     owner_id TEXT PRIMARY KEY NOT NULL, next_poll_at INTEGER NOT NULL DEFAULT 0,
     lease_until INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
     last_started_at INTEGER, last_succeeded_at INTEGER, status TEXT NOT NULL DEFAULT 'waiting',
-    fetched INTEGER NOT NULL DEFAULT 0, continuation TEXT
+    fetched INTEGER NOT NULL DEFAULT 0, continuation TEXT, import_cursor TEXT
   )`,
+  'CREATE INDEX IF NOT EXISTS idx_observations_owner_observed ON bookmark_observations(owner_id, observed_at)',
   `CREATE TABLE IF NOT EXISTS background_health (
     id INTEGER PRIMARY KEY CHECK (id = 1), heartbeat_at INTEGER NOT NULL
   )`,

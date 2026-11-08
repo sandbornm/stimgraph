@@ -193,6 +193,7 @@ export const bookmarkObservations = sqliteTable('bookmark_observations', {
 }, (table) => [
   uniqueIndex('idx_observations_owner_post').on(table.ownerId, table.postId),
   index('idx_observations_owner_sequence').on(table.ownerId, table.sequence),
+  index('idx_observations_owner_observed').on(table.ownerId, table.observedAt),
 ]);
 
 export const bookmarkSyncState = sqliteTable('bookmark_sync_state', {
@@ -205,6 +206,7 @@ export const bookmarkSyncState = sqliteTable('bookmark_sync_state', {
   status: text('status').notNull().default('waiting'),
   fetched: integer('fetched').notNull().default(0),
   continuation: text('continuation'),
+  importCursor: text('import_cursor'),
   backfillCompletedAt: integer('backfill_completed_at'),
 });
 

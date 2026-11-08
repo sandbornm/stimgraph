@@ -1,8 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { storeBookmarks, storeFollows } from '@/db/storage';
+import { readImportCursor, storeBookmarks, storeFollows, writeImportCursor } from '@/db/storage';
+import { importOwnerBookmarks } from '@/lib/manual-import';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
-import { fetchXBookmarks, iterateXBookmarks } from '@/lib/x-bookmarks';
+import { fetchXBookmarks } from '@/lib/x-bookmarks';
 import { fetchXFollowing, XFollowsScopeError } from '@/lib/x-following';
 import { labelAfterSync } from '@/lib/jev-sync';
 
@@ -15,6 +16,7 @@ type SyncEvent = {
   insertedIds?: string[];
   page?: number;
   hasMore?: boolean;
+  nextToken?: string | null;
   live?: boolean;
   limit?: number;
   authors?: string[];
@@ -38,6 +40,13 @@ async function importFollowing(accessToken: string, userId: string) {
   }
 }
 
+function cursorStore(ownerId: string) {
+  return {
+    read: () => readImportCursor(ownerId),
+    write: (cursor: string | null) => writeImportCursor(ownerId, cursor),
+  };
+}
+
 export async function POST(request: NextRequest) {
   const active = await getActiveXSession(request);
   if (!active) return NextResponse.json({ error: 'Connect X before syncing.' }, { status: 401 });
@@ -55,7 +64,7 @@ export async function POST(request: NextRequest) {
   }
   const limit = Math.max(1, Math.min(live ? 40 : 1000, Math.floor(requestedLimit)));
 
-  if (!stream || live) {
+  if (live) {
     try {
       const result = await fetchXBookmarks({
         accessToken: active.session.accessToken,
@@ -65,13 +74,13 @@ export async function POST(request: NextRequest) {
       const stored = await storeBookmarks({
         owner: active.session.profile,
         bookmarks: result.bookmarks,
-        skipUnchanged: live,
+        skipUnchanged: true,
       });
       const response = NextResponse.json({
         imported: stored.stored,
         inserted: stored.inserted,
         insertedIds: stored.insertedIds,
-        hasMore: live ? false : result.hasMore,
+        hasMore: false,
         live,
         limit,
       });
@@ -80,6 +89,35 @@ export async function POST(request: NextRequest) {
       const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
       return NextResponse.json({ error: message }, { status: 502 });
     }
+  }
+
+  if (!stream) {
+    let imported = 0;
+    let inserted = 0;
+    const insertedIds: string[] = [];
+    const result = await importOwnerBookmarks({
+      accessToken: active.session.accessToken,
+      userId: active.session.profile.id,
+      limit,
+      store: cursorStore(active.session.profile.id),
+      onPage: async (page) => {
+        const stored = await storeBookmarks({
+          owner: active.session.profile,
+          bookmarks: page.items,
+          optimize: !page.nextToken,
+        });
+        imported += stored.stored;
+        inserted += stored.inserted;
+        insertedIds.push(...stored.insertedIds);
+      },
+    });
+    const body = {
+      imported, inserted, insertedIds, live, limit,
+      hasMore: Boolean(result.cursor), nextToken: result.cursor,
+      ...(result.error ? { error: result.error } : {}),
+    };
+    const response = NextResponse.json(body, { status: result.error ? 502 : 200 });
+    return withRenewedSession(response, request, active.renewedCookie);
   }
 
   const encoder = new TextEncoder();
@@ -92,29 +130,37 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       };
       try {
-        for await (const page of iterateXBookmarks({
+        const result = await importOwnerBookmarks({
           accessToken: active.session.accessToken,
           userId: active.session.profile.id,
           limit,
-        })) {
-          const stored = await storeBookmarks({
-            owner: active.session.profile,
-            bookmarks: page.bookmarks,
-            optimize: !page.hasMore,
-          });
-          imported += stored.stored;
-          inserted += stored.inserted;
-          allInsertedIds.push(...stored.insertedIds);
-          send({
-            type: 'page',
-            imported,
-            inserted,
-            insertedIds: stored.insertedIds,
-            page: page.page,
-            hasMore: page.hasMore,
-            limit,
-            authors: [...new Set(page.bookmarks.map((bookmark) => bookmark.authorUsername))].slice(0, 4),
-          });
+          store: cursorStore(active.session.profile.id),
+          onPage: async (page) => {
+            const stored = await storeBookmarks({
+              owner: active.session.profile,
+              bookmarks: page.items,
+              optimize: !page.nextToken,
+            });
+            imported += stored.stored;
+            inserted += stored.inserted;
+            allInsertedIds.push(...stored.insertedIds);
+            send({
+              type: 'page',
+              imported,
+              inserted,
+              insertedIds: stored.insertedIds,
+              page: page.page,
+              hasMore: Boolean(page.nextToken),
+              nextToken: page.nextToken,
+              limit,
+              authors: [...new Set(page.items.map((bookmark) => bookmark.authorUsername))].slice(0, 4),
+            });
+          },
+        });
+        if (result.error) {
+          send({ type: 'error', error: result.error, imported, inserted, insertedIds: allInsertedIds, limit, hasMore: Boolean(result.cursor), nextToken: result.cursor });
+          controller.close();
+          return;
         }
         const follows = await importFollowing(active.session.accessToken, active.session.profile.id);
         send({
@@ -131,7 +177,8 @@ export async function POST(request: NextRequest) {
           imported,
           inserted,
           insertedIds: allInsertedIds,
-          hasMore: false,
+          hasMore: Boolean(result.cursor),
+          nextToken: result.cursor,
           limit,
           following: follows.following,
           followingError: follows.followingError,

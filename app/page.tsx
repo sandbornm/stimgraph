@@ -1471,6 +1471,7 @@ type SyncStreamEvent = {
   insertedIds?: string[];
   page?: number;
   hasMore?: boolean;
+  nextToken?: string | null;
   limit?: number;
   authors?: string[];
   following?: number;
@@ -2269,8 +2270,10 @@ export default function Home() {
       let inserted = 0;
       let following = 0;
       let followingError = '';
+      let resume = false;
       await readNdjson<SyncStreamEvent>(response, async (event) => {
         if (event.type === 'error') throw new Error(event.error ?? 'Sync failed.');
+        if (event.type === 'done') resume = Boolean(event.hasMore);
         imported = event.imported ?? imported;
         inserted = event.inserted ?? inserted;
         if (event.following != null) following = event.following;
@@ -2311,9 +2314,10 @@ export default function Home() {
       });
       setSyncState('done');
       setLiveInserted((count) => count + inserted);
+      const resumeNote = resume ? ' Sync again to continue.' : '';
       setSyncMessage(followingError
-        ? `${imported} bookmarks mapped · ${inserted} new. ${followingError}`
-        : `${imported} bookmarks mapped · ${inserted} new · ${following} following.`);
+        ? `${imported} bookmarks mapped · ${inserted} new. ${followingError}${resumeNote}`
+        : `${imported} bookmarks mapped · ${inserted} new · ${following} following.${resumeNote}`);
       setActivity({
         kind: 'sync',
         label: 'Map updated',

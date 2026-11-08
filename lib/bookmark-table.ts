@@ -9,6 +9,7 @@ export type TableRow = {
   handle: string;
   text: string;
   createdAt: string | null;
+  observedAt?: number | null;
   url: string;
   topics: TableTopic[];
 };
@@ -57,6 +58,23 @@ export function topicCounts(rows: TableRow[]): TopicCount[] {
     map.set(topic.id, entry);
   }
   return [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+export type TableSort = 'saved_desc' | 'saved_asc' | 'posted' | 'author';
+
+function timeOf(row: TableRow, sort: TableSort) {
+  if (sort !== 'posted' && typeof row.observedAt === 'number') return row.observedAt;
+  const posted = row.createdAt ? Date.parse(row.createdAt) : Number.NaN;
+  return Number.isFinite(posted) ? posted : Number.NEGATIVE_INFINITY;
+}
+
+export function sortRows(rows: TableRow[], sort: TableSort): TableRow[] {
+  const direction = sort === 'saved_asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    if (sort === 'author') return a.handle.localeCompare(b.handle) || a.author.localeCompare(b.author) || a.id.localeCompare(b.id);
+    const delta = timeOf(a, sort) - timeOf(b, sort);
+    return delta === 0 ? a.id.localeCompare(b.id) * direction : delta * direction;
+  });
 }
 
 export type TableFilter = { q?: string; topics?: string[]; author?: string };

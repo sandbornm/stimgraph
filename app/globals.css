@@ -1226,6 +1226,7 @@ html[data-theme='light'] .trajectory { --path: #356d60; }
 .bm-table { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; overflow: hidden; z-index: 2; background: var(--bg, #0b0b0b); }
 .bm-bar { display: flex; align-items: center; gap: 12px; }
 .bm-bar input { flex: 1; padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(127,127,127,.3); background: transparent; color: inherit; font: inherit; }
+.bm-bar select { padding: 9px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,.3); background: transparent; color: inherit; font: inherit; }
 .bm-count { opacity: .6; font-size: 12px; font-variant-numeric: tabular-nums; }
 .bm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .bm-chip { display: inline-flex; gap: 5px; align-items: center; padding: 2px 9px; border-radius: 999px; border: 1px solid rgba(127,127,127,.35); background: transparent; color: inherit; font-size: 12px; cursor: pointer; line-height: 1.6; }
