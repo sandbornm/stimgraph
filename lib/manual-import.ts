@@ -30,22 +30,12 @@ function withResume(message: string, cursor: string | null) {
   return `${message} Saved pages stay imported. Sync again to continue.`;
 }
 
-// A short page is our limit, not X ending. X can omit next_token on that
-// request, so a missing token must keep the cursor that fetched the page.
-export function cursorAfterPage({
-  previous,
-  nextToken,
-  itemCount,
-  pageSize,
-}: {
-  previous: string | null;
-  nextToken: string | null;
-  itemCount: number;
-  pageSize: number;
-}): string | null {
-  if (nextToken) return nextToken;
-  if (itemCount > 0 && pageSize < MANUAL_PAGE_SIZE) return previous;
-  return null;
+const MAX_EMPTY_PAGES = 3;
+
+// An absent next_token means X has no further page, including after a short request.
+// Keeping the previous cursor would make the next sync reread that page.
+export function cursorAfterPage({ nextToken }: { nextToken: string | null }): string | null {
+  return nextToken;
 }
 
 export async function importOwnerBookmarks({
@@ -64,6 +54,7 @@ export async function importOwnerBookmarks({
   let cursor = await store.read();
   let imported = 0;
   let page = 0;
+  let emptyPages = 0;
   try {
     while (imported < limit) {
       const pageSize = Math.min(MANUAL_PAGE_SIZE, limit - imported);
@@ -78,19 +69,20 @@ export async function importOwnerBookmarks({
       if (step.done || !step.value) break;
       const items = step.value.bookmarks;
       const reported = step.value.nextToken ?? null;
-      const nextToken = cursorAfterPage({
-        previous: cursor,
-        nextToken: reported,
-        itemCount: items.length,
-        pageSize,
-      });
-      if (items.length === 0 && nextToken === cursor) break;
+      if (reported !== null && reported === cursor) {
+        page += 1;
+        await onPage({ items, nextToken: cursor, page });
+        imported += items.length;
+        break;
+      }
+      const nextToken = cursorAfterPage({ nextToken: reported });
+      if (items.length === 0) emptyPages += 1;
       page += 1;
       await onPage({ items, nextToken, page });
       imported += items.length;
       await store.write(nextToken);
       cursor = nextToken;
-      if (!nextToken || (pageSize < MANUAL_PAGE_SIZE && !reported)) break;
+      if (!nextToken || (items.length === 0 && emptyPages >= MAX_EMPTY_PAGES)) break;
     }
     return { imported, cursor };
   } catch (error) {

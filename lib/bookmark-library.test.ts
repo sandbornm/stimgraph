@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { parseLibraryQuery, queryBookmarkLibrary, type SqlRunner } from './bookmark-library.ts';
+import { librarySearchParams, parseLibraryQuery, queryBookmarkLibrary, type SqlRunner } from './bookmark-library.ts';
+import { sortRows, type TableRow } from './bookmark-table.ts';
 
 function database(): SqlRunner {
   const db = new DatabaseSync(':memory:');
@@ -100,6 +101,74 @@ describe('bookmark library query', () => {
     const past = await queryBookmarkLibrary(db, 'me', parseLibraryQuery(new URLSearchParams('sort=saved_desc&limit=2&offset=6')));
     assert.deepEqual(past.bookmarks, []);
     assert.equal(past.nextOffset, null);
+  });
+
+  it('keeps the author filter when the next page is built from librarySearchParams', async () => {
+    const db = database();
+    const first = await queryBookmarkLibrary(db, 'me', parseLibraryQuery(new URLSearchParams('author=ada&sort=saved_desc&limit=1')));
+    assert.deepEqual(first.bookmarks.map((row) => row.id), ['a4']);
+    assert.equal(first.nextOffset, 1);
+    const params = librarySearchParams({
+      q: '', sort: 'saved_desc', topics: [], author: '@ada', limit: 1, offset: first.nextOffset ?? 0,
+    });
+    const second = await queryBookmarkLibrary(db, 'me', parseLibraryQuery(params));
+    assert.equal(params.get('author'), 'ada');
+    assert.deepEqual(second.bookmarks.map((row) => row.id), ['a3']);
+  });
+
+  it('orders saved time and author the same way as the client, including ties', async () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`
+      CREATE TABLE bookmarks (
+        owner_id TEXT NOT NULL, post_id TEXT NOT NULL, author_id TEXT NOT NULL,
+        author_username TEXT NOT NULL, author_name TEXT NOT NULL, text TEXT NOT NULL,
+        created_at TEXT, synced_at INTEGER NOT NULL, PRIMARY KEY (owner_id, post_id)
+      );
+      CREATE TABLE bookmark_observations (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL,
+        post_id TEXT NOT NULL, observed_at INTEGER NOT NULL, UNIQUE(owner_id, post_id)
+      );
+      CREATE TABLE topics (
+        owner_id TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL,
+        source TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (owner_id, id)
+      );
+      CREATE TABLE bookmark_topics (
+        owner_id TEXT NOT NULL, post_id TEXT NOT NULL, topic_id TEXT NOT NULL,
+        confidence INTEGER NOT NULL, evidence TEXT NOT NULL, source TEXT NOT NULL,
+        PRIMARY KEY (owner_id, post_id, topic_id)
+      );
+    `);
+    const insert = db.prepare(`INSERT INTO bookmarks (
+      owner_id, post_id, author_id, author_username, author_name, text, created_at, synced_at
+    ) VALUES ('me', ?, ?, ?, ?, 'note', ?, 1)`);
+    const observe = db.prepare('INSERT INTO bookmark_observations (owner_id, post_id, observed_at) VALUES (\'me\', ?, ?)');
+    const fixture: Array<{ id: string; handle: string; name: string; observed: number | null; created: string | null }> = [
+      { id: 'm1', handle: 'bob', name: 'Bob', observed: 100, created: '2024-01-01T00:00:00.000Z' },
+      { id: 'm2', handle: 'Ada', name: 'Zed', observed: 100, created: '2020-01-01T00:00:00.000Z' },
+      { id: 'm3', handle: 'ada', name: 'Amy', observed: 100, created: '2021-01-01T00:00:00.000Z' },
+      { id: 'm4', handle: 'Cara', name: 'Cara', observed: null, created: '2025-01-01T00:00:00.000Z' },
+      { id: 'm5', handle: 'bob', name: 'bob', observed: 50, created: null },
+    ];
+    for (const row of fixture) {
+      insert.run(row.id, row.handle, row.handle, row.name, row.created);
+      if (row.observed !== null) observe.run(row.id, row.observed);
+    }
+    const runner: SqlRunner = { all: async (sql, values) => db.prepare(sql).all(...values) as Record<string, unknown>[] };
+    const tableRows: TableRow[] = fixture.map((row) => ({
+      id: row.id, author: row.name, handle: row.handle, text: 'note', createdAt: row.created,
+      observedAt: row.observed, url: `https://x.com/${row.handle}/status/${row.id}`, topics: [],
+    }));
+    const expected = {
+      saved_desc: ['m3', 'm2', 'm1', 'm5', 'm4'],
+      saved_asc: ['m4', 'm5', 'm1', 'm2', 'm3'],
+      author: ['m3', 'm2', 'm1', 'm5', 'm4'],
+    };
+    for (const sort of ['saved_desc', 'saved_asc', 'author'] as const) {
+      const sql = await queryBookmarkLibrary(runner, 'me', parseLibraryQuery(new URLSearchParams(`sort=${sort}&limit=10`)));
+      const ids = sql.bookmarks.map((row) => row.id);
+      assert.deepEqual(ids, expected[sort], sort);
+      assert.deepEqual(sortRows(tableRows, sort).map((row) => row.id), ids, sort);
+    }
   });
 
   it('rejects unknown sort and clamps paging input', () => {

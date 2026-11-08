@@ -62,18 +62,32 @@ export function topicCounts(rows: TableRow[]): TopicCount[] {
 
 export type TableSort = 'saved_desc' | 'saved_asc' | 'posted' | 'author';
 
-function timeOf(row: TableRow, sort: TableSort) {
-  if (sort !== 'posted' && typeof row.observedAt === 'number') return row.observedAt;
-  const posted = row.createdAt ? Date.parse(row.createdAt) : Number.NaN;
-  return Number.isFinite(posted) ? posted : Number.NEGATIVE_INFINITY;
+function cmp(a: string, b: string) {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+// SQLite NOCASE folds A-Z only. localeCompare does not, so author order would drift from SQL.
+function cmpNoCase(a: string, b: string) {
+  const fold = (value: string) => value.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+  return cmp(fold(a), fold(b));
 }
 
 export function sortRows(rows: TableRow[], sort: TableSort): TableRow[] {
-  const direction = sort === 'saved_asc' ? 1 : -1;
   return [...rows].sort((a, b) => {
-    if (sort === 'author') return a.handle.localeCompare(b.handle) || a.author.localeCompare(b.author) || a.id.localeCompare(b.id);
-    const delta = timeOf(a, sort) - timeOf(b, sort);
-    return delta === 0 ? a.id.localeCompare(b.id) * direction : delta * direction;
+    if (sort === 'author') return cmpNoCase(a.handle, b.handle) || cmpNoCase(a.author, b.author) || cmp(a.id, b.id);
+    if (sort === 'posted') {
+      if (a.createdAt == null && b.createdAt == null) return cmp(b.id, a.id);
+      if (a.createdAt == null) return 1;
+      if (b.createdAt == null) return -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      return cmp(b.id, a.id);
+    }
+    const savedA = typeof a.observedAt === 'number' ? a.observedAt : 0;
+    const savedB = typeof b.observedAt === 'number' ? b.observedAt : 0;
+    if (savedA !== savedB) return sort === 'saved_asc' ? savedA - savedB : savedB - savedA;
+    return sort === 'saved_asc' ? cmp(a.id, b.id) : cmp(b.id, a.id);
   });
 }
 

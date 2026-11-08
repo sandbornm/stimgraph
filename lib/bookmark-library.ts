@@ -52,13 +52,17 @@ export function parseLibraryQuery(params: URLSearchParams): LibraryQuery {
   return { q: (params.get('q') ?? '').trim().slice(0, 200), sort, topics, author, limit, offset };
 }
 
-export function librarySearchParams(input: { q: string; sort: LibrarySort; topics: string[]; limit: number; offset: number }) {
+export function librarySearchParams(input: {
+  q: string; sort: LibrarySort; topics: string[]; author?: string; limit: number; offset: number;
+}) {
   const params = new URLSearchParams();
   if (input.q.trim()) params.set('q', input.q.trim());
   params.set('sort', input.sort);
   params.set('limit', String(input.limit));
   params.set('offset', String(input.offset));
   if (input.topics.length) params.set('topic', input.topics.join(','));
+  const author = (input.author ?? '').replace(/^@/, '').trim();
+  if (author) params.set('author', author);
   return params;
 }
 

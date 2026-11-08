@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { applyMigrationSql } from './apply-migration-sql.mjs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { webcrypto } from 'node:crypto';
@@ -12,7 +13,9 @@ const path = resolve(dir, 'test.sqlite');
 const scenario = resolve(dir, 'scenario.json');
 writeFileSync(scenario, JSON.stringify({ count: 125 }));
 const db = new DatabaseSync(path);
-for (const file of readdirSync('drizzle').filter((file) => file.endsWith('.sql')).sort()) db.exec(readFileSync(resolve('drizzle', file), 'utf8'));
+for (const file of readdirSync('drizzle').filter((file) => file.endsWith('.sql')).sort()) {
+  applyMigrationSql(db, readFileSync(resolve('drizzle', file), 'utf8'));
+}
 const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('stimgraph:x-session:v1:stimgraph-inert-test-secret'));
 const key = await webcrypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt']);
 const iv = webcrypto.getRandomValues(new Uint8Array(12));

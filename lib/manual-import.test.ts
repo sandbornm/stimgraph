@@ -140,39 +140,102 @@ describe('manual bookmark import', () => {
     }
   });
 
-  it('keeps the last good cursor when the import limit, not X, ends on a short page', async () => {
+  it('follows a short page token and treats a missing token as X being done', async () => {
     const items = collection(40);
-    const sizes: number[] = [];
+    const tokens: Array<string | null> = [];
     mock.method(globalThis, 'fetch', async (url: URL) => {
       const size = Number(url.searchParams.get('max_results'));
-      sizes.push(size);
-      const offset = Number(url.searchParams.get('pagination_token') ?? '0');
+      const token = url.searchParams.get('pagination_token');
+      tokens.push(token);
+      const offset = Number(token ?? '0');
       const data = items.slice(offset, offset + size);
-      const more = offset + data.length < items.length;
+      const next = offset + data.length;
       return Response.json({
         data,
         includes: { users: [{ id: 'author', username: 'reader', name: 'Reader' }] },
-        meta: {
-          result_count: data.length,
-          ...(size >= MANUAL_PAGE_SIZE && more ? { next_token: String(offset + data.length) } : {}),
-        },
+        meta: { result_count: data.length, ...(next < items.length ? { next_token: String(next) } : {}) },
+      });
+    });
+    const store = memoryStore();
+    try {
+      const paused = await importOwnerBookmarks({
+        accessToken: 'inert-test-token', userId: 'me', limit: 25, store, onPage: async () => {},
+      });
+      assert.equal(paused.error, undefined);
+      assert.equal(paused.cursor, '25');
+      assert.deepEqual(tokens, [null, '20']);
+
+      const continued = await importOwnerBookmarks({
+        accessToken: 'inert-test-token', userId: 'me', limit: 20, store, onPage: async () => {},
+      });
+      assert.equal(continued.cursor, null);
+      assert.equal(tokens[2], '25');
+    } finally {
+      mock.restoreAll();
+    }
+
+    const reread: Array<string | null> = [];
+    mock.method(globalThis, 'fetch', async (url: URL) => {
+      reread.push(url.searchParams.get('pagination_token'));
+      return pageResponse(collection(5), 0, 5);
+    });
+    const stalled = memoryStore('20');
+    try {
+      const first = await importOwnerBookmarks({
+        accessToken: 'inert-test-token', userId: 'me', limit: 5, store: stalled, onPage: async () => {},
+      });
+      assert.equal(first.cursor, null);
+      const second = await importOwnerBookmarks({
+        accessToken: 'inert-test-token', userId: 'me', limit: 5, store: stalled, onPage: async () => {},
+      });
+      assert.equal(second.cursor, null);
+      assert.deepEqual(reread, ['20', null]);
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  it('stops when a page repeats its token and keeps that cursor', async () => {
+    let calls = 0;
+    mock.method(globalThis, 'fetch', async () => {
+      calls += 1;
+      if (calls > 4) throw new Error('import did not stop');
+      return Response.json({
+        data: [post('1'), post('2')],
+        includes: { users: [{ id: 'author', username: 'reader', name: 'Reader' }] },
+        meta: { result_count: 2, next_token: 'again' },
       });
     });
     const store = memoryStore();
     try {
       const result = await importOwnerBookmarks({
-        accessToken: 'inert-test-token',
-        userId: 'me',
-        limit: 25,
-        store,
-        onPage: async () => {},
+        accessToken: 'inert-test-token', userId: 'me', limit: 40, store, onPage: async () => {},
       });
-      assert.deepEqual(sizes, [20, 5]);
       assert.equal(result.error, undefined);
-      assert.equal(result.imported, 25);
-      assert.equal(result.cursor, '20');
-      assert.equal(store.current(), '20');
-      assert.equal(store.writes.includes(null), false);
+      assert.equal(calls, 2);
+      assert.equal(result.cursor, 'again');
+      assert.equal(store.current(), 'again');
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  it('stops after empty pages that keep issuing new tokens and keeps the last token', async () => {
+    let calls = 0;
+    mock.method(globalThis, 'fetch', async () => {
+      calls += 1;
+      if (calls > 8) throw new Error('import did not stop');
+      return Response.json({ data: [], meta: { result_count: 0, next_token: `e${calls}` } });
+    });
+    const store = memoryStore();
+    try {
+      const result = await importOwnerBookmarks({
+        accessToken: 'inert-test-token', userId: 'me', limit: 20, store, onPage: async () => {},
+      });
+      assert.equal(result.error, undefined);
+      assert.ok(calls <= 3);
+      assert.equal(result.cursor, `e${calls}`);
+      assert.equal(store.current(), result.cursor);
     } finally {
       mock.restoreAll();
     }
@@ -208,11 +271,9 @@ describe('manual bookmark import', () => {
     }
   });
 
-  it('guard: never nulls a cursor a short page or an empty continuation still needs', () => {
-    assert.equal(cursorAfterPage({ previous: '20', nextToken: null, itemCount: 5, pageSize: 5 }), '20');
-    assert.equal(cursorAfterPage({ previous: '20', nextToken: 'later', itemCount: 0, pageSize: 20 }), 'later');
-    assert.equal(cursorAfterPage({ previous: 'saved', nextToken: null, itemCount: 0, pageSize: 20 }), null);
-    assert.equal(cursorAfterPage({ previous: '20', nextToken: null, itemCount: 20, pageSize: 20 }), null);
-    assert.equal(cursorAfterPage({ previous: null, nextToken: 'next', itemCount: 3, pageSize: 5 }), 'next');
+  it('guard: a missing token clears the cursor and a present token is kept', () => {
+    assert.equal(cursorAfterPage({ nextToken: null, previous: '20', itemCount: 5, pageSize: 5 }), null);
+    assert.equal(cursorAfterPage({ nextToken: 'later' }), 'later');
+    assert.equal(cursorAfterPage({ nextToken: null }), null);
   });
 });
