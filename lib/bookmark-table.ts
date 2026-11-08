@@ -9,6 +9,7 @@ export type TableRow = {
   handle: string;
   text: string;
   createdAt: string | null;
+  observedAt?: number | null;
   url: string;
   topics: TableTopic[];
 };
@@ -57,6 +58,37 @@ export function topicCounts(rows: TableRow[]): TopicCount[] {
     map.set(topic.id, entry);
   }
   return [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+export type TableSort = 'saved_desc' | 'saved_asc' | 'posted' | 'author';
+
+function cmp(a: string, b: string) {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+// SQLite NOCASE folds A-Z only. localeCompare does not, so author order would drift from SQL.
+function cmpNoCase(a: string, b: string) {
+  const fold = (value: string) => value.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+  return cmp(fold(a), fold(b));
+}
+
+export function sortRows(rows: TableRow[], sort: TableSort): TableRow[] {
+  return [...rows].sort((a, b) => {
+    if (sort === 'author') return cmpNoCase(a.handle, b.handle) || cmpNoCase(a.author, b.author) || cmp(a.id, b.id);
+    if (sort === 'posted') {
+      if (a.createdAt == null && b.createdAt == null) return cmp(b.id, a.id);
+      if (a.createdAt == null) return 1;
+      if (b.createdAt == null) return -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      return cmp(b.id, a.id);
+    }
+    const savedA = typeof a.observedAt === 'number' ? a.observedAt : 0;
+    const savedB = typeof b.observedAt === 'number' ? b.observedAt : 0;
+    if (savedA !== savedB) return sort === 'saved_asc' ? savedA - savedB : savedB - savedA;
+    return sort === 'saved_asc' ? cmp(a.id, b.id) : cmp(b.id, a.id);
+  });
 }
 
 export type TableFilter = { q?: string; topics?: string[]; author?: string };

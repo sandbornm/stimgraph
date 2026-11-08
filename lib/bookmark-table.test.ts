@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { clampLimit, filterRows, keywordTopics, rowsFromGraph, rowsToMarkdown, topicCounts, type TableRow } from './bookmark-table.ts';
+import { clampLimit, filterRows, keywordTopics, rowsFromGraph, rowsToMarkdown, sortRows, topicCounts, type TableRow } from './bookmark-table.ts';
 
 const row = (id: string, text: string, topics: TableRow['topics'] = [], handle = 'ada'): TableRow => ({ id, author: 'Ada', handle, text, createdAt: '2026-01-02T00:00:00Z', url: `https://x.com/${handle}/status/${id}`, topics });
 
@@ -54,5 +54,13 @@ describe('bookmark table', () => {
     assert.equal(rows[0].handle, 'ada');
     assert.deepEqual(rows[0].topics, [{ id: 'ml', label: 'ML' }]);
     assert.match(rowsToMarkdown(rows), /full \\\| text/);
+  });
+  it('sorts saved time by observed_at when the row has one, and posted time by created_at', () => {
+    const olderSave = { ...row('a', 'newer post', [], 'ada'), createdAt: '2024-01-01T00:00:00Z', observedAt: 100 };
+    const newerSave = { ...row('b', 'older post', [], 'bob'), createdAt: '2020-01-01T00:00:00Z', observedAt: 300 };
+    assert.deepEqual(sortRows([olderSave, newerSave], 'saved_desc').map((item) => item.id), ['b', 'a']);
+    assert.deepEqual(sortRows([olderSave, newerSave], 'saved_asc').map((item) => item.id), ['a', 'b']);
+    assert.deepEqual(sortRows([olderSave, newerSave], 'posted').map((item) => item.id), ['a', 'b']);
+    assert.deepEqual(sortRows([newerSave, olderSave], 'author').map((item) => item.id), ['a', 'b']);
   });
 });

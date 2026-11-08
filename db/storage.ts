@@ -193,7 +193,25 @@ export async function ensureSchema() {
   } catch (error) {
     if (!/duplicate column/i.test(String(error))) throw error;
   }
+  try {
+    await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN import_cursor TEXT').run();
+  } catch (error) {
+    if (!/duplicate column/i.test(String(error))) throw error;
+  }
   initialized = true;
+}
+
+export async function readImportCursor(ownerId: string) {
+  await ensureSchema();
+  const row = await getD1().prepare('SELECT import_cursor AS cursor FROM bookmark_sync_state WHERE owner_id = ?')
+    .bind(ownerId).first<{ cursor: string | null }>();
+  return row?.cursor ?? null;
+}
+
+export async function writeImportCursor(ownerId: string, cursor: string | null) {
+  await ensureSchema();
+  await getD1().prepare(`INSERT INTO bookmark_sync_state (owner_id, import_cursor) VALUES (?, ?)
+    ON CONFLICT(owner_id) DO UPDATE SET import_cursor = excluded.import_cursor`).bind(ownerId, cursor).run();
 }
 
 const OAUTH_PENDING_TTL_MS = 10 * 60 * 1000;
