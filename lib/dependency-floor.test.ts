@@ -22,10 +22,12 @@ describe('dependency floor', () => {
     }
   });
 
-  it('rejects Next below 16.4.1', () => {
-    assert.match(dependencyViolations({ ...safe, next: '16.4.0' }).join('\n'), /next 16\.4\.0 is below 16\.4\.1/);
-    assert.match(dependencyViolations({ ...safe, next: '16.2.6' }).join('\n'), /next 16\.2\.6 is below 16\.4\.1/);
-    assert.match(dependencyViolations({ ...safe, eslintConfigNext: '16.4.0' }).join('\n'), /eslint-config-next 16\.4\.0 is below 16\.4\.1/);
+  it('rejects Next 16.4.4 and earlier releases', () => {
+    for (const version of ['16.4.4', '16.4.3', '16.4.0', '16.2.6']) {
+      const pattern = version.replaceAll('.', '\\.');
+      assert.match(dependencyViolations({ ...safe, next: version }).join('\n'), new RegExp(`next ${pattern} is below 16\\.4\\.5`));
+      assert.match(dependencyViolations({ ...safe, eslintConfigNext: version }).join('\n'), new RegExp(`eslint-config-next ${pattern} is below 16\\.4\\.5`));
+    }
   });
 
   it('rejects a React Server DOM build outside the patched set', () => {
@@ -40,11 +42,25 @@ describe('dependency floor', () => {
     assert.match(violations.join('\n'), /do not match/);
   });
 
-  it('rejects a lockfile that reintroduces a vulnerable Next or React Server DOM pin', () => {
-    const patched = '  next@16.4.5:\n  eslint-config-next@16.4.5:\n  react-server-dom-webpack@19.3.1:\n';
+  it('rejects a lockfile that reintroduces an old Next, React, brace-expansion, or esbuild pin', () => {
+    const patched = [
+      '  next@16.4.5:',
+      '  eslint-config-next@16.4.5:',
+      '  react@19.3.1:',
+      '  react-dom@19.3.1:',
+      '  react-server-dom-webpack@19.3.1:',
+      '  brace-expansion@1.1.21:',
+      '  brace-expansion@5.0.12:',
+      '  esbuild@0.25.12:',
+      '  esbuild@0.28.2:',
+      '  esbuild@<=0.24.2: 0.25.12',
+    ].join('\n');
     assert.deepEqual(lockfileViolations(patched), []);
-    assert.match(lockfileViolations(patched.replace('next@16.4.5', 'next@16.2.6')).join('\n'), /next@16\.2\.6/);
-    assert.match(lockfileViolations(patched.replace('react-server-dom-webpack@19.3.1', 'react-server-dom-webpack@19.3.0')).join('\n'), /react-server-dom-webpack@19\.3\.0/);
+    assert.match(lockfileViolations(patched.replace('next@16.4.5', 'next@16.4.4')).join('\n'), /next@16\.4\.4 is below 16\.4\.5/);
+    assert.match(lockfileViolations(patched.replace('react-dom@19.3.1', 'react-dom@19.3.0')).join('\n'), /do not match/);
+    assert.match(lockfileViolations(patched.replace('brace-expansion@1.1.21', 'brace-expansion@1.1.18')).join('\n'), /brace-expansion@1\.1\.18 is below 1\.1\.21/);
+    assert.match(lockfileViolations(patched.replace('esbuild@0.25.12', 'esbuild@0.24.2')).join('\n'), /esbuild@0\.24\.2 is at or below 0\.24\.2/);
+    assert.match(lockfileViolations(patched.replace('esbuild@0.28.2', 'esbuild@0.18.20')).join('\n'), /esbuild@0\.18\.20 is at or below 0\.24\.2/);
   });
 
   it('accepts the repository manifest and lockfile', () => {
