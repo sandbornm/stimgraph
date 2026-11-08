@@ -30,6 +30,24 @@ function withResume(message: string, cursor: string | null) {
   return `${message} Saved pages stay imported. Sync again to continue.`;
 }
 
+// A short page is our limit, not X ending. X can omit next_token on that
+// request, so a missing token must keep the cursor that fetched the page.
+export function cursorAfterPage({
+  previous,
+  nextToken,
+  itemCount,
+  pageSize,
+}: {
+  previous: string | null;
+  nextToken: string | null;
+  itemCount: number;
+  pageSize: number;
+}): string | null {
+  if (nextToken) return nextToken;
+  if (itemCount > 0 && pageSize < MANUAL_PAGE_SIZE) return previous;
+  return null;
+}
+
 export async function importOwnerBookmarks({
   accessToken,
   userId,
@@ -59,13 +77,20 @@ export async function importOwnerBookmarks({
       const step = await generator.next();
       if (step.done || !step.value) break;
       const items = step.value.bookmarks;
-      const nextToken = items.length > 0 ? step.value.nextToken ?? null : null;
+      const reported = step.value.nextToken ?? null;
+      const nextToken = cursorAfterPage({
+        previous: cursor,
+        nextToken: reported,
+        itemCount: items.length,
+        pageSize,
+      });
+      if (items.length === 0 && nextToken === cursor) break;
       page += 1;
       await onPage({ items, nextToken, page });
       imported += items.length;
       await store.write(nextToken);
       cursor = nextToken;
-      if (!nextToken) break;
+      if (!nextToken || (pageSize < MANUAL_PAGE_SIZE && !reported)) break;
     }
     return { imported, cursor };
   } catch (error) {

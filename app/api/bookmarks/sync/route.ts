@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { readImportCursor, storeBookmarks, storeFollows, writeImportCursor } from '@/db/storage';
 import { importOwnerBookmarks } from '@/lib/manual-import';
+import { finishNonStreamSync } from '@/lib/non-stream-sync';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { fetchXBookmarks } from '@/lib/x-bookmarks';
 import { fetchXFollowing, XFollowsScopeError } from '@/lib/x-following';
@@ -95,29 +96,40 @@ export async function POST(request: NextRequest) {
     let imported = 0;
     let inserted = 0;
     const insertedIds: string[] = [];
-    const result = await importOwnerBookmarks({
-      accessToken: active.session.accessToken,
-      userId: active.session.profile.id,
-      limit,
-      store: cursorStore(active.session.profile.id),
-      onPage: async (page) => {
-        const stored = await storeBookmarks({
-          owner: active.session.profile,
-          bookmarks: page.items,
-          optimize: !page.nextToken,
-        });
-        imported += stored.stored;
-        inserted += stored.inserted;
-        insertedIds.push(...stored.insertedIds);
-      },
-    });
-    const body = {
-      imported, inserted, insertedIds, live, limit,
-      hasMore: Boolean(result.cursor), nextToken: result.cursor,
-      ...(result.error ? { error: result.error } : {}),
-    };
-    const response = NextResponse.json(body, { status: result.error ? 502 : 200 });
-    return withRenewedSession(response, request, active.renewedCookie);
+    try {
+      const settled = await finishNonStreamSync(
+        () => importOwnerBookmarks({
+          accessToken: active.session.accessToken,
+          userId: active.session.profile.id,
+          limit,
+          store: cursorStore(active.session.profile.id),
+          onPage: async (page) => {
+            const stored = await storeBookmarks({
+              owner: active.session.profile,
+              bookmarks: page.items,
+              optimize: !page.nextToken,
+            });
+            imported += stored.stored;
+            inserted += stored.inserted;
+            insertedIds.push(...stored.insertedIds);
+          },
+        }),
+        () => labelAfterSync(active.session.profile.id),
+      );
+      if (!settled.result) {
+        return NextResponse.json({ error: settled.error ?? 'Bookmark sync failed.' }, { status: 502 });
+      }
+      const body = {
+        imported, inserted, insertedIds, live, limit,
+        hasMore: Boolean(settled.result.cursor), nextToken: settled.result.cursor,
+        ...(settled.error ? { error: settled.error } : {}),
+      };
+      const response = NextResponse.json(body, { status: settled.status });
+      return withRenewedSession(response, request, active.renewedCookie);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bookmark sync failed.';
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
   }
 
   const encoder = new TextEncoder();
