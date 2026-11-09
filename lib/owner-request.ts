@@ -1,6 +1,5 @@
 import type { NextRequest } from 'next/server';
-import { getD1 } from '@/db/index';
-import { ensureSchema, loadXSessionRecord } from '@/db/storage';
+import { ensureSchema, loadUnambiguousOwnerId, loadXSessionRecord } from '@/db/storage';
 import { X_SESSION_COOKIE } from './x-session';
 import { getRuntimeValue } from './runtime-env';
 import { trustedTailnetLogin } from './background-policy';
@@ -16,9 +15,7 @@ export async function resolveOwnerId(request: NextRequest): Promise<string | und
   if (getRuntimeValue('STIMGRAPH_TAILNET') === 'true'
     && trustedTailnetLogin(request.headers, getRuntimeValue('STIMGRAPH_TAILNET_LOGIN'))) {
     // The personal service is deliberately single-owner. Ambiguity fails closed.
-    const owners = await getD1().prepare(`SELECT id FROM accounts UNION SELECT owner_id AS id
-      FROM x_sessions WHERE expires_at > ? LIMIT 2`).bind(Date.now()).all<{ id: string }>();
-    if (owners.results.length === 1) return owners.results[0].id;
+    return (await loadUnambiguousOwnerId()) ?? undefined;
   }
   return undefined;
 }

@@ -166,7 +166,7 @@ pnpm run build:local  # Next.js production build (no credentials needed)
 pnpm run start:local  # serve that build on 127.0.0.1:3001
 ```
 
-CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLite integration test on Node 24, and a gitleaks history scan. Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLite integration test and the ambiguous-owner denial check on Node 24, and a gitleaks history scan. Builds and tests use inert credentials passed directly to the process, never `.env.local`. Integration tests (`scripts/test-local.mjs`, `scripts/test-owner-ambiguity.mjs`, `scripts/test-background.mjs`) are described in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 **Deploy:** there is no hosted version. The supported deployment is the private always-on Mac service (Tailscale Serve + launchd) in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Do not expose the server on a public interface; its auth model assumes loopback + Tailscale.
 
