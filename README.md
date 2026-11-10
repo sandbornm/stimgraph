@@ -140,7 +140,9 @@ The app exposes separate controls to disconnect the browser session or delete th
 
 ## Agent access (read-only)
 
-Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. No MCP server or install is needed; any agent that can fetch a URL on your tailnet can use it.
+Give an agent `https://<host>.<tailnet>.ts.net/agents` (or `/llms.txt`). JSON endpoints: `/api/agent/bookmarks?q=&topic=&author=&limit=`, `/api/agent/topics`, `/api/agent/export?format=md|json`. Any agent that can fetch a URL on your tailnet can use that HTTP API.
+
+A separate loopback MCP process for clients that speak MCP lives in [`mcp/`](mcp/README.md). It is not served on the tailnet, and it is not deployed from this repository. The security spec is [docs/mcp-security-spec.md](docs/mcp-security-spec.md).
 
 ### How this fits with agents that already read X
 
