@@ -75,7 +75,8 @@ jobs:
       - working-directory: mcp
         run: cargo clippy --locked --all-targets -- -D warnings
       - working-directory: mcp
-        run: cargo test --locked --all-targets
+        # from_env clears a process environment variable, so tests do not overlap.
+        run: cargo test --locked --all-targets -- --test-threads=1
       - working-directory: mcp
         run: cargo build --locked
       - run: mcp/scripts/verify-digest.test.sh

@@ -102,7 +102,11 @@ impl ServerConfig {
             std::env::var("STIMGRAPH_MCP_PRINCIPALS").map_err(|_| ConfigError::NoPrincipals)?;
         let config = Self::try_new(bind, database, &principals);
         principals.zeroize();
-        std::env::remove_var("STIMGRAPH_MCP_PRINCIPALS");
+        // SAFETY: remove_var races any other thread that reads the process
+        // environment. The binary calls from_env before it starts a runtime.
+        unsafe {
+            std::env::remove_var("STIMGRAPH_MCP_PRINCIPALS");
+        }
         config
     }
 }
@@ -121,6 +125,12 @@ struct RawPrincipal {
     token: String,
     owner_id: String,
     revoked: bool,
+}
+
+impl Drop for RawPrincipal {
+    fn drop(&mut self) {
+        self.token.zeroize();
+    }
 }
 
 pub fn parse_principals(json: &str) -> Result<Vec<StoredPrincipal>, ConfigError> {
@@ -233,6 +243,21 @@ mod tests {
             parse_principals("not-json").err(),
             Some(ConfigError::PrincipalsInvalid)
         );
+    }
+
+    #[test]
+    fn from_env_clears_the_principal_variable_when_json_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("empty.sqlite");
+        std::fs::write(&database, b"").unwrap();
+        std::env::set_var("STIMGRAPH_MCP_BIND", "127.0.0.1:9");
+        std::env::set_var("STIMGRAPH_MCP_DATABASE", &database);
+        std::env::set_var("STIMGRAPH_MCP_PRINCIPALS", "not-json");
+        let error = ServerConfig::from_env().unwrap_err();
+        assert_eq!(error, ConfigError::PrincipalsInvalid);
+        assert!(std::env::var("STIMGRAPH_MCP_PRINCIPALS").is_err());
+        std::env::remove_var("STIMGRAPH_MCP_BIND");
+        std::env::remove_var("STIMGRAPH_MCP_DATABASE");
     }
 
     #[test]

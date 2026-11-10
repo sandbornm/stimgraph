@@ -63,6 +63,20 @@ impl Fixture {
     }
 }
 
+#[test]
+fn fixture_reads_the_wal_after_corpus_reopens_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("bookmarks.sqlite");
+    seed(&db);
+    let wal = wal_path(&db);
+    assert!(
+        !wal.exists(),
+        "the writer close left a wal file, which this fixture does not require"
+    );
+    let _ = corpus(&db);
+    std::fs::read(&wal).expect("wal missing after corpus");
+}
+
 fn wal_path(db: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", db.display()))
 }
