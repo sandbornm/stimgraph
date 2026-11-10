@@ -75,10 +75,10 @@ Move the sync commit forward only after you run both commands and confirm that t
 
 ## Sync
 
-Covered code was last confirmed at commit `5e2454e97e18afc4ad3e416cbc605e6389756ef5`.
+Covered code was last confirmed at commit `d906fc6ae9572fea07f6b6afe128375704771cb7`.
 
 ## Limits
 
-The check does not prove the SDK, SQLite, the operating system, or Tailscale. It does not model term matching, pagination, or the 5000-row window. Host and origin behavior in the Rust test is the pinned SDK's response to the allowlist in `streamable_config`. Passing TLC does not mean the diagram proved the binary.
+The check does not prove the SDK, SQLite, the operating system, or Tailscale. It does not model term matching, pagination, the 5000-row window, or the response caps. A term after 16000 characters is the Rust test `search_matches_text_and_topics_past_the_response_cap`, not a TLC state. Host and origin behavior in the Rust test is the pinned SDK's response to the allowlist in `streamable_config`. Passing TLC does not mean the diagram proved the binary.
 
 After a later edit that skips this check, use `/maintain-formal-verification-skill` to bring the model back in line.
