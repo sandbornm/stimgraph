@@ -5,6 +5,7 @@
 
 # Dependencies and generated output
 node_modules/
+/mcp/target/
 dist/
 .vinext/
 .next/
