@@ -27,7 +27,7 @@ On a cold cargo cache, fetch the pinned crates once, then rerun the script.
 cargo fetch --locked --manifest-path mcp/Cargo.toml
 ```
 
-The model check needs Java 21, `curl`, and `sha1sum`. `mcp/scripts/check-access-model.sh` downloads `tla2tools.jar` 1.7.4 into `~/.cache/stimgraph-mcp` when the jar is absent, and it checks SHA-1 `bee4a54f3ee3d4afc347c3240ec2d9e93b075104`.
+The model check needs Java 21 and `curl`. `mcp/scripts/check-access-model.sh` downloads `tla2tools.jar` 1.7.4 into `~/.cache/stimgraph-mcp` when the jar is absent. It checks the SHA-1 published in the v1.7.4 release notes, `bee4a54f3ee3d4afc347c3240ec2d9e93b075104`, and SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88` of that same jar. The release notes do not publish a SHA-256. The check uses `shasum`, `sha256sum`, or `python3` on the file path. It does not call `sha1sum --check`.
 
 `mcp/scripts/check-access-model.sh --expect-violation` must fail the `Separation` invariant. That failure is the broken model, not a server mode.
 

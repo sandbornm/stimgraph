@@ -115,7 +115,7 @@ stateDiagram-v2
 
 `ReadOnlyStore::open` opens with `SQLITE_OPEN_READ_ONLY`, sets `query_only`, then installs the authorizer. The authorizer allows `SELECT` and reads of `bookmarks`, `topics`, and `bookmark_topics`. It denies other tables, including `x_sessions`. It denies inserts, updates, deletes, schema changes, and a `query_only` pragma that would turn the flag off.
 
-Statements are fixed strings with `?` parameters. The owner id is bound from `authorize`. For detail, the post id is bound from `parse_post_id`. Search terms, the author, and the topic are applied in `row_matches` after the owner-scoped read.
+Statements are fixed strings with `?` parameters. The owner id is bound from `authorize`. For detail, the post id is bound from `parse_post_id`. Search terms, the author, and the topic are applied in `row_matches` after the owner-scoped read. `row_matches` sees the full stored text and every stored topic. The response then keeps at most 16000 characters and 8 topics. A match past those caps still returns the row, with `text_truncated` or `topics_truncated` set. The read stays inside the 5000-row owner window.
 
 `open` on a missing path returns an error and does not create a file. Startup runs no migration.
 

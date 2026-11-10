@@ -6,7 +6,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JAR="${TLA2TOOLS_JAR:-${HOME}/.cache/stimgraph-mcp/tla2tools-1.7.4.jar}"
 URL="https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+# SHA-1 published in the v1.7.4 release notes. That release does not publish a SHA-256.
 SHA1="bee4a54f3ee3d4afc347c3240ec2d9e93b075104"
+SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 MODE="pass"
 if [[ "${1:-}" == "--expect-violation" ]]; then
   MODE="violation"
@@ -19,7 +21,7 @@ if [[ ! -f "$JAR" ]]; then
   mkdir -p "$(dirname "$JAR")"
   curl --fail --silent --show-error --location --output "$JAR" "$URL"
 fi
-echo "${SHA1}  ${JAR}" | sha1sum --check --status
+"$(dirname "$0")/verify-digest.sh" --file "$JAR" --sha256 "$SHA256" --sha1 "$SHA1"
 
 cd "$ROOT/tla"
 if [[ "$MODE" == "pass" ]]; then

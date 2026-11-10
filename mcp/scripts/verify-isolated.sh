@@ -19,6 +19,7 @@ unset STIMGRAPH_MCP_PRINCIPALS
 unset STIMGRAPH_MCP_BIND
 
 mkdir -p "$PROOF"
+"$ROOT/mcp/scripts/verify-digest.test.sh"
 cd "$ROOT/mcp"
 
 set +e

@@ -117,13 +117,13 @@ impl ReadOnlyStore {
             let topics = topics_for_owner(conn, owner)?;
             let mut stmt = conn.prepare(BOOKMARKS_BY_OWNER).map_err(read_error)?;
             let rows = stmt
-                .query_map([owner.as_str()], |row| read_bookmark(row, &topics))
+                .query_map([owner.as_str()], |row| read_stored(row, &topics))
                 .map_err(read_error)?;
             let mut matched = Vec::new();
             for row in rows {
-                let view = row.map_err(read_error)?;
-                if row_matches(&view, query) {
-                    matched.push(view);
+                let stored = row.map_err(read_error)?;
+                if row_matches(&stored, query) {
+                    matched.push(bound_view(stored));
                 }
             }
             drop(stmt);
@@ -145,7 +145,9 @@ impl ReadOnlyStore {
             let Some(row) = rows.next().map_err(read_error)? else {
                 return Ok(None);
             };
-            Ok(Some(read_bookmark(row, &topics).map_err(read_error)?))
+            Ok(Some(bound_view(
+                read_stored(row, &topics).map_err(read_error)?,
+            )))
         })
     }
 
@@ -261,30 +263,46 @@ fn topics_for_post(
     Ok(HashMap::from([(post_id.as_str().to_string(), topics)]))
 }
 
-fn read_bookmark(
+struct StoredBookmark {
+    id: String,
+    author: String,
+    handle: String,
+    text: String,
+    created_at: Option<String>,
+    topics: Vec<TopicView>,
+}
+
+fn read_stored(
     row: &rusqlite::Row<'_>,
     topics: &HashMap<String, Vec<TopicView>>,
-) -> rusqlite::Result<BookmarkView> {
+) -> rusqlite::Result<StoredBookmark> {
     let id: String = row.get(0)?;
-    let handle: String = row.get(1)?;
-    let author: String = row.get(2)?;
-    let text: String = row.get(3)?;
-    let created_at: Option<String> = row.get(4)?;
-    let mut topic_list = topics.get(&id).cloned().unwrap_or_default();
-    let topics_truncated = topic_list.len() > MAX_TOPICS;
-    topic_list.truncate(MAX_TOPICS);
-    let (text, text_truncated) = truncate_text(text);
-    Ok(BookmarkView {
-        url: bookmark_url(&handle, &id),
+    Ok(StoredBookmark {
+        topics: topics.get(&id).cloned().unwrap_or_default(),
         id,
-        author,
-        handle,
+        handle: row.get(1)?,
+        author: row.get(2)?,
+        text: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+fn bound_view(stored: StoredBookmark) -> BookmarkView {
+    let topics_truncated = stored.topics.len() > MAX_TOPICS;
+    let mut topics = stored.topics;
+    topics.truncate(MAX_TOPICS);
+    let (text, text_truncated) = truncate_text(stored.text);
+    BookmarkView {
+        url: bookmark_url(&stored.handle, &stored.id),
+        id: stored.id,
+        author: stored.author,
+        handle: stored.handle,
         text,
-        created_at,
-        topics: topic_list,
+        created_at: stored.created_at,
+        topics,
         text_truncated,
         topics_truncated,
-    })
+    }
 }
 
 fn truncate_text(text: String) -> (String, bool) {
@@ -310,14 +328,14 @@ fn bookmark_url(handle: &str, post_id: &str) -> Option<String> {
     }
 }
 
-fn row_matches(view: &BookmarkView, query: &SearchQuery) -> bool {
+fn row_matches(stored: &StoredBookmark, query: &SearchQuery) -> bool {
     if let Some(author) = &query.author {
-        if view.handle.to_lowercase() != *author {
+        if stored.handle.to_lowercase() != *author {
             return false;
         }
     }
     if let Some(topic) = &query.topic {
-        let topic_ok = view
+        let topic_ok = stored
             .topics
             .iter()
             .any(|item| item.id.to_lowercase() == *topic || item.label.to_lowercase() == *topic);
@@ -330,10 +348,11 @@ fn row_matches(view: &BookmarkView, query: &SearchQuery) -> bool {
     }
     let haystack = format!(
         "{} {} @{} {}",
-        view.text,
-        view.author,
-        view.handle,
-        view.topics
+        stored.text,
+        stored.author,
+        stored.handle,
+        stored
+            .topics
             .iter()
             .map(|topic| topic.label.as_str())
             .collect::<Vec<_>>()
@@ -595,5 +614,98 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, StoreError::Window));
         assert!(!error.to_string().contains("WINDOW_ROW_TEXT"));
+    }
+
+    #[test]
+    fn search_matches_text_and_topics_past_the_response_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE bookmarks (
+                owner_id TEXT NOT NULL, post_id TEXT NOT NULL, author_id TEXT NOT NULL,
+                author_username TEXT NOT NULL, author_name TEXT NOT NULL, text TEXT NOT NULL,
+                created_at TEXT, synced_at INTEGER NOT NULL,
+                PRIMARY KEY (owner_id, post_id)
+            );
+            CREATE TABLE topics (
+                owner_id TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL,
+                source TEXT NOT NULL, created_at INTEGER NOT NULL,
+                PRIMARY KEY (owner_id, id)
+            );
+            CREATE TABLE bookmark_topics (
+                owner_id TEXT NOT NULL, post_id TEXT NOT NULL, topic_id TEXT NOT NULL,
+                confidence INTEGER NOT NULL, evidence TEXT NOT NULL, source TEXT NOT NULL,
+                PRIMARY KEY (owner_id, post_id, topic_id)
+            );",
+        )
+        .unwrap();
+        let prefix = "prefixterm ";
+        let filler = "y".repeat(MAX_TEXT_CHARS - prefix.chars().count());
+        let text = format!("{prefix}{filler} LATE_TEXT_TERM");
+        conn.execute(
+            "INSERT INTO bookmarks (owner_id, post_id, author_id, author_username, author_name, text, created_at, synced_at)
+             VALUES ('owner-a', '501', '1', 'ada', 'Ada', ?1, '2026-01-05T00:00:00Z', 5)",
+            [&text],
+        )
+        .unwrap();
+        for index in 0..=MAX_TOPICS {
+            let label = format!("t{index:02}");
+            conn.execute(
+                "INSERT INTO topics (owner_id, id, label, source, created_at) VALUES ('owner-a', ?1, ?1, 'stored', 1)",
+                [&label],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO bookmark_topics (owner_id, post_id, topic_id, confidence, evidence, source)
+                 VALUES ('owner-a', '501', ?1, 100, 'stored', 'stored')",
+                [&label],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let store = ReadOnlyStore::open(&path).unwrap();
+        let owner = OwnerId::parse("owner-a").unwrap();
+        let query = |terms: &[&str], topic: Option<&str>| SearchQuery {
+            terms: terms.iter().map(|term| (*term).to_string()).collect(),
+            author: None,
+            topic: topic.map(str::to_string),
+            offset: 0,
+            limit: 20,
+        };
+        let late_text = store
+            .search(&owner, &query(&["late_text_term"], None))
+            .unwrap();
+        assert_eq!(late_text.matched, 1);
+        let row = &late_text.bookmarks[0];
+        assert_eq!(row.id, "501");
+        assert!(row.text_truncated);
+        assert_eq!(row.text.chars().count(), MAX_TEXT_CHARS);
+        assert!(!row.text.to_lowercase().contains("late_text_term"));
+        let prefix_hit = store.search(&owner, &query(&["prefixterm"], None)).unwrap();
+        assert_eq!(prefix_hit.matched, 1);
+        assert!(prefix_hit.bookmarks[0].text.contains("prefixterm"));
+        let late_topic = format!("t{MAX_TOPICS:02}");
+        let topic_hit = store
+            .search(&owner, &query(&[], Some(&late_topic)))
+            .unwrap();
+        assert_eq!(topic_hit.matched, 1);
+        assert!(topic_hit.bookmarks[0].topics_truncated);
+        assert_eq!(topic_hit.bookmarks[0].topics.len(), MAX_TOPICS);
+        assert!(topic_hit.bookmarks[0]
+            .topics
+            .iter()
+            .all(|topic| topic.id != late_topic));
+        let label_hit = store.search(&owner, &query(&[&late_topic], None)).unwrap();
+        assert_eq!(label_hit.matched, 1);
+        let detail = store
+            .get(&owner, &parse_post_id("501").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(detail.text_truncated);
+        assert_eq!(detail.text.chars().count(), MAX_TEXT_CHARS);
+        assert!(!detail.text.to_lowercase().contains("late_text_term"));
+        assert!(detail.topics_truncated);
+        assert_eq!(detail.topics.len(), MAX_TOPICS);
     }
 }

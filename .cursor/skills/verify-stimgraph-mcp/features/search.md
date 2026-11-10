@@ -36,4 +36,5 @@ cargo test --locked --test protocol --manifest-path mcp/Cargo.toml -- --test-thr
 
 - The fixture is a WAL database. The test compares the row corpus, the main file bytes, and the `-wal` bytes. A change in the `-shm` file is not a failed proof by itself.
 - Owner filtering is the SQL predicate `owner_id = ?1` in `BOOKMARKS_BY_OWNER`. The Rust filter does not check `owner_id` again. A scratch edit that drops that predicate fails this test because owner-a then receives post `201` and `OTHER_OWNER_BOOKMARK_TEXT`.
+- `search_matches_text_and_topics_past_the_response_cap` stores a term after 16000 characters and a 9th topic. Search returns that row. The response text is 16000 characters, the response topic list has 8 entries, and neither the late term nor the late topic appears in the response.
 - An empty data directory is not a successful search. The server does not create a database.

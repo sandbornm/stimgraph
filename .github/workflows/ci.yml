@@ -78,6 +78,7 @@ jobs:
         run: cargo test --locked --all-targets
       - working-directory: mcp
         run: cargo build --locked
+      - run: mcp/scripts/verify-digest.test.sh
       - run: mcp/scripts/check-access-model.sh
       - run: mcp/scripts/check-access-model.sh --expect-violation
 
