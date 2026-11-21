@@ -1,5 +1,3 @@
-// API: https://docs.typesafe.ai/api.md
-
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const JEV_MODEL = 'jev-latest';
 export const JEV_MIN_CONFIDENCE = 0.5;

@@ -14,10 +14,10 @@
     "build:local": "next build --webpack",
     "start:local": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "test": "node --experimental-strip-types --test lib/*.test.ts",
+    "test": "node --experimental-strip-types --test lib/*.test.ts eslint/no-comments.test.mjs",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && eslint . --ignore-pattern dist --ignore-pattern .next && node --experimental-strip-types --test lib/*.test.ts",
+    "check": "tsc --noEmit && eslint . --ignore-pattern dist --ignore-pattern .next && node --experimental-strip-types --test lib/*.test.ts eslint/no-comments.test.mjs",
     "jev:label": "node scripts/jev-label.mjs"
   },
   "dependencies": {

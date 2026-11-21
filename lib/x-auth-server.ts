@@ -8,7 +8,7 @@ import {
   X_SESSION_TTL_MS,
 } from '@/db/storage';
 import { refreshXSession } from './x-api';
-import { XRequestError } from './x-errors';
+import { refreshErrorAction } from './x-errors';
 import { requestOrigin } from './request-origin';
 import { openXSession, randomBase64Url, sealXSession, X_SESSION_COOKIE, type XSession } from './x-session';
 
@@ -54,7 +54,7 @@ async function refreshStoredSession(session: XSession, sessionId?: string) {
     const id = await persistSession(refreshed, sessionId);
     return { session: refreshed, renewedCookie: id };
   } catch (error) {
-    if (error instanceof XRequestError && error.revoked) {
+    if (refreshErrorAction(error) === 'delete') {
       if (sessionId) await deleteXSessionRecord(sessionId);
       return null;
     }

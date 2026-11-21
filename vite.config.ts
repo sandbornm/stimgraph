@@ -12,8 +12,11 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 const d1: string | null = 'DB';
 const r2: string | null = null;
 
-// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
-const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+export const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+
+export function seatbeltServerWatch() {
+  return { watch: { useFsEvents: false, usePolling: true } };
+}
 
 const localBindingConfig = {
   main: './worker.ts',
@@ -43,7 +46,6 @@ export default defineConfig(async () => {
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
   process.env.CLOUDFLARE_DEV_REGISTRY_PATH ??= '.wrangler/registry';
 
-  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
@@ -52,9 +54,7 @@ export default defineConfig(async () => {
       host: '127.0.0.1',
       port: 3001,
       strictPort: true,
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
-        : {}),
+      ...(isCodexSeatbeltSandbox ? seatbeltServerWatch() : {}),
     },
     plugins: [
       vinext(),

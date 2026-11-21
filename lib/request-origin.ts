@@ -1,9 +1,10 @@
 import { getRuntimeValue } from './runtime-env';
+import { resolveRequestOrigin } from './request-origin-core';
 
 export function requestOrigin(request: Request) {
-  if (getRuntimeValue('STIMGRAPH_TAILNET') === 'true') {
-    const configured = getRuntimeValue('STIMGRAPH_PUBLIC_ORIGIN');
-    if (configured) return new URL(configured).origin;
-  }
-  return new URL(request.url).origin;
+  return resolveRequestOrigin(
+    request,
+    getRuntimeValue('STIMGRAPH_TAILNET'),
+    getRuntimeValue('STIMGRAPH_PUBLIC_ORIGIN'),
+  );
 }

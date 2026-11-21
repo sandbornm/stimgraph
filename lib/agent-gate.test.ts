@@ -19,3 +19,10 @@ test('agent API can be disabled and restricted to an allowlist', () => {
   assert.equal(tailnetAgentAllowed(h(ok), { ...tailnet, logins: 'Me@Example.com, other@x.com' }), true);
   assert.equal(tailnetAgentAllowed(h(ok), { ...tailnet, logins: 'other@x.com' }), false);
 });
+
+test('a Tailscale-User-Login header is ignored unless tailnet mode is explicitly enabled', () => {
+  const spoofed = h({ host: 'mac.example.ts.net', 'tailscale-user-login': 'attacker@example.com' });
+  assert.equal(tailnetAgentAllowed(spoofed, { tailnet: 'false' }), false);
+  assert.equal(tailnetAgentAllowed(spoofed, { tailnet: undefined }), false);
+  assert.equal(tailnetAgentAllowed(spoofed, { tailnet: 'true' }), true);
+});
