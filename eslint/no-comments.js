@@ -2,7 +2,7 @@ const LICENSE_HEADER =
   /SPDX-License-Identifier\s*:|@license\b|licensed under\b|all rights reserved\b/i;
 const COPYRIGHT = /\bcopyright\b|\(c\)|©/i;
 const BUNDLER_MAGIC =
-  /(?:webpack(?:ChunkName|Prefetch|Preload|Mode|Ignore|Exports|Include|Exclude)|@vite-ignore|#__(?:PURE|NO_SIDE_EFFECTS|INLINE|MANGLE_PROP)__)\b/;
+  /^(?:webpack(?:ChunkName|Prefetch|Preload|Mode|Ignore|Exports|Include|Exclude)|@vite-ignore|#__(?:PURE|NO_SIDE_EFFECTS|INLINE|MANGLE_PROP)__)\b/;
 const ESLINT_ENABLE = /^\s*eslint-enable\b/;
 const TS_EXPECT_ERROR = /^\s*@ts-expect-error\b/;
 
@@ -23,7 +23,7 @@ export function isUnscopedEslintDisable(text) {
 
 function isScopedEslintDisable(text) {
   const body = text.trim();
-  return /(?:^|\/\/|\/\*)\s*eslint-disable(?:-next-line|-line)?(?![\w-])\s+\S/.test(body)
+  return /^eslint-disable(?:-next-line|-line)?(?![\w-])\s+\S/.test(body)
     && !isUnscopedEslintDisable(body);
 }
 
@@ -33,7 +33,7 @@ function commentText(comment) {
 
 function isBeforeCode(comment, source) {
   const start = comment.range[0];
-  return /^\s*$/.test(source.getText().slice(0, start));
+  return /^(?:#!.*\r?\n)?\s*$/.test(source.getText().slice(0, start));
 }
 
 function isLicenseHeader(comment, source) {

@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import { Linter } from 'eslint';
-import { RuleTester } from 'eslint';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, it, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { Linter, RuleTester } from 'eslint';
 import plugin, { isUnscopedEslintDisable, noCommentsRule } from './no-comments.js';
+
+RuleTester.describe = describe;
+RuleTester.it = it;
+RuleTester.itOnly = it.only;
 
 const tester = new RuleTester({
   languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
@@ -10,37 +16,60 @@ const tester = new RuleTester({
 
 const error = { messageId: 'noComments' };
 
-test('local/no-comments allowlist and rejections', () => {
-  tester.run('no-comments', noCommentsRule, {
-    valid: [
-      { code: 'export const n = 1;\n' },
-      { code: '/* SPDX-License-Identifier: MIT */\nexport const n = 1;\n' },
-      {
-        code: '/* Copyright (c) 2026 r2brief contributors.\n * Licensed under the MIT License. */\nexport const n = 1;\n',
-      },
-      { code: 'const x = /*#__PURE__*/ fn();\n' },
-      { code: 'const x = /* #__NO_SIDE_EFFECTS__ */ fn();\n' },
-      {
-        code: 'const mod = await import(/* webpackChunkName: "mod" */ "./mod.js");\n',
-      },
-      {
-        code: 'const mod = await import(/* @vite-ignore */ "./mod.js");\n',
-      },
-      { code: '// @ts-expect-error the module shape is generated\nconst n = 1;\n' },
-    ],
-    invalid: [
-      { code: '// leftover note\nconst n = 1;\n', errors: [error] },
-      { code: '/* section label */\nconst n = 1;\n', errors: [error] },
-      { code: 'const n = 1; // trailing why\n', errors: [error] },
-      { code: '// TODO: later\nconst n = 1;\n', errors: [error] },
-      { code: '// @ts-ignore hidden any\nconst n = 1;\n', errors: [error] },
-      { code: '// @ts-nocheck\nconst n = 1;\n', errors: [error] },
-      {
-        code: 'const n = 1;\n/* SPDX-License-Identifier: MIT */\n',
-        errors: [error],
-      },
-    ],
-  });
+tester.run('no-comments', noCommentsRule, {
+  valid: [
+    { code: 'export const n = 1;\n' },
+    { code: '/* SPDX-License-Identifier: MIT */\nexport const n = 1;\n' },
+    {
+      code: '/* Copyright (c) 2026 r2brief contributors.\n * Licensed under the MIT License. */\nexport const n = 1;\n',
+    },
+    {
+      code: '#!/usr/bin/env node\n/* SPDX-License-Identifier: MIT */\nexport const n = 1;\n',
+    },
+    { code: 'const x = /*#__PURE__*/ fn();\n' },
+    { code: 'const x = /* #__NO_SIDE_EFFECTS__ */ fn();\n' },
+    {
+      code: 'const mod = await import(/* webpackChunkName: "mod" */ "./mod.js");\n',
+    },
+    {
+      code: 'const mod = await import(/* @vite-ignore */ "./mod.js");\n',
+    },
+    { code: '// @ts-expect-error the module shape is generated\nconst n = 1;\n' },
+  ],
+  invalid: [
+    { code: '// leftover note\nconst n = 1;\n', errors: [error] },
+    { code: '/* section label */\nconst n = 1;\n', errors: [error] },
+    { code: 'const n = 1; // trailing why\n', errors: [error] },
+    { code: '// TODO: later\nconst n = 1;\n', errors: [error] },
+    { code: '// @ts-ignore hidden any\nconst n = 1;\n', errors: [error] },
+    { code: '// @ts-nocheck\nconst n = 1;\n', errors: [error] },
+    {
+      code: 'const n = 1;\n/* SPDX-License-Identifier: MIT */\n',
+      errors: [error],
+    },
+    {
+      code: '#!/usr/bin/env node\nconst n = 1;\n/* SPDX-License-Identifier: MIT */\n',
+      errors: [error],
+    },
+    {
+      code: '// remember to add webpackChunkName here\nconst n = 1;\n',
+      errors: [error],
+    },
+    {
+      code: 'const mod = await import(/* not a real @vite-ignore here */ "./mod.js");\n',
+      errors: [error],
+    },
+    {
+      code: '// docs mention eslint-disable-next-line no-empty\nconst n = 1;\n',
+      errors: [error],
+    },
+  ],
+});
+
+test('RuleTester uses node:test describe and it', () => {
+  assert.equal(RuleTester.describe, describe);
+  assert.equal(RuleTester.it, it);
+  assert.equal(RuleTester.itOnly, it.only);
 });
 
 const linter = new Linter({ configType: 'flat' });
@@ -81,7 +110,6 @@ test('an unscoped eslint-disable-next-line is reported', () => {
   assert.equal(messages[0].ruleId, 'local/no-comments');
 });
 
-
 test('scoped eslint-disable-next-line directives are not treated as unscoped', () => {
   assert.equal(isUnscopedEslintDisable('// eslint-disable-next-line local/no-comments'), false);
   assert.equal(isUnscopedEslintDisable('const n = 1; // eslint-disable-next-line no-empty'), false);
@@ -92,9 +120,54 @@ test('scoped eslint-disable-next-line directives are not treated as unscoped', (
   assert.equal(isUnscopedEslintDisable('/* eslint-disable */'), true);
 });
 
-test('source files do not use unscoped eslint-disable directives', async () => {
-  const { readdirSync, readFileSync, statSync } = await import('node:fs');
-  const { join } = await import('node:path');
+function unscopedEslintDisableLineNumbers(source) {
+  const hits = [];
+  for (const [index, line] of source.split('\n').entries()) {
+    if (!line.includes('//') && !line.includes('/*') && !line.includes('*/')) {
+      continue;
+    }
+    if (isUnscopedEslintDisable(line)) {
+      hits.push(index + 1);
+    }
+  }
+  return hits;
+}
+
+function scanRootFromImportMetaUrl(importMetaUrl) {
+  return fileURLToPath(new URL('..', importMetaUrl));
+}
+
+test('the source scan catches an unscoped trailing eslint-disable-line', () => {
+  assert.deepEqual(
+    unscopedEslintDisableLineNumbers('const n = 1; // eslint-disable-line\n'),
+    [1],
+  );
+  assert.deepEqual(
+    unscopedEslintDisableLineNumbers('const n = 1; /* eslint-disable */\n'),
+    [1],
+  );
+  assert.deepEqual(
+    unscopedEslintDisableLineNumbers('const n = 1; // eslint-disable-line no-empty\n'),
+    [],
+  );
+  assert.deepEqual(
+    unscopedEslintDisableLineNumbers('const n = 1;\n'),
+    [],
+  );
+});
+
+test('the repo scan root is decoded with fileURLToPath', () => {
+  const importMetaUrl = 'file:///tmp/my%20project/eslint/no-comments.test.mjs';
+  const root = scanRootFromImportMetaUrl(importMetaUrl);
+  assert.equal(root.replace(/\/$/, ''), '/tmp/my project');
+  assert.notEqual(new URL('..', importMetaUrl).pathname.replace(/\/$/, ''), '/tmp/my project');
+  assert.equal(
+    scanRootFromImportMetaUrl(import.meta.url),
+    fileURLToPath(new URL('..', import.meta.url)),
+  );
+});
+
+test('source files do not use unscoped eslint-disable directives', () => {
   const skip = new Set(['node_modules', 'dist', '.next', '.git', '.wrangler']);
   const files = [];
   function walk(dir) {
@@ -108,16 +181,12 @@ test('source files do not use unscoped eslint-disable directives', async () => {
       }
     }
   }
-  walk(new URL('..', import.meta.url).pathname);
+  walk(scanRootFromImportMetaUrl(import.meta.url));
   const hits = [];
   for (const path of files) {
     const source = readFileSync(path, 'utf8');
-    for (const line of source.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('//') && !trimmed.includes('/*') && !trimmed.includes('*/')) {
-        continue;
-      }
-      if (isUnscopedEslintDisable(trimmed)) hits.push(path);
+    if (unscopedEslintDisableLineNumbers(source).length > 0) {
+      hits.push(path);
     }
   }
   assert.deepEqual(hits, []);
