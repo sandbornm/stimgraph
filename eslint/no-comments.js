@@ -1,28 +1,41 @@
 const LICENSE_HEADER =
-  /SPDX-License-Identifier\s*:|@license\b|licensed under\b|all rights reserved\b/i;
+  /SPDX-License-Identifier\s*:|SPDX-FileCopyrightText\s*:|@license\b|licensed under\b|all rights reserved\b/i;
 const COPYRIGHT = /\bcopyright\b|\(c\)|©/i;
 const BUNDLER_MAGIC =
   /^(?:webpack(?:ChunkName|Prefetch|Preload|Mode|Ignore|Exports|Include|Exclude)|@vite-ignore|[@#]__(?:PURE|NO_SIDE_EFFECTS)__|#__(?:INLINE|MANGLE_PROP)__)\b/;
-const ESLINT_ENABLE = /^\s*eslint-enable\b/;
 const TS_EXPECT_ERROR = /^@ts-expect-error\s+\S/;
+const RULE_NAME = '@?[\\w-]+(?:/[\\w-]+)*';
+const RULE_LIST = `${RULE_NAME}(?:\\s*,\\s*${RULE_NAME})*`;
+const DIRECTIVE_REASON = '(?:\\s*--\\s*\\S.*)?';
+const WELL_FORMED_DISABLE = new RegExp(
+  `^eslint-disable(?:-next-line|-line)?\\s+${RULE_LIST}${DIRECTIVE_REASON}$`,
+);
+const WELL_FORMED_ENABLE = new RegExp(
+  `^eslint-enable(?:\\s+${RULE_LIST})?${DIRECTIVE_REASON}$`,
+);
 
-function eslintDisableRuleList(text) {
-  const comment = /(?:\/\/|\/\*)\s*(eslint-disable(?:-next-line|-line)?(?![\w-])[\s\S]*)$/.exec(
+function normalizeDirectiveBody(text) {
+  const comment = /(?:\/\/|\/\*)\s*(eslint-(?:disable(?:-next-line|-line)?|enable)(?![\w-])[\s\S]*)$/.exec(
     text.trim(),
   );
-  const body = (comment ? comment[1] : text.trim())
+  return (comment ? comment[1] : text.trim())
     .replace(/^\/\/\s*/, '')
     .replace(/^\/\*\s*/, '')
     .replace(/\s*\*\/$/, '')
     .split('\n')
     .map((line) => line.replace(/^\s*\*/, '').trim())
     .join('\n')
-    .trim();
-  const match = /^eslint-disable(?:-next-line|-line)?(?![\w-])([\s\S]*)$/.exec(body);
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function eslintDisableRuleList(text) {
+  const body = normalizeDirectiveBody(text);
+  const match = /^eslint-disable(?:-next-line|-line)?(?![\w-])(.*)$/.exec(body);
   if (!match) {
     return null;
   }
-  return match[1].replace(/--[\s\S]*$/, '').trim();
+  return match[1].replace(/--.*$/, '').trim();
 }
 
 export function isUnscopedEslintDisable(text) {
@@ -63,30 +76,67 @@ export function collectForbiddenEslintDisableLines(source) {
   return [...lines].sort((a, b) => a - b);
 }
 
-function isScopedEslintDisable(text) {
-  const body = text.trim();
-  return /^eslint-disable(?:-next-line|-line)?(?![\w-])\s+\S/.test(body)
-    && !isForbiddenEslintDisable(body);
+function isWellFormedEslintDisable(text) {
+  return WELL_FORMED_DISABLE.test(normalizeDirectiveBody(text))
+    && !isForbiddenEslintDisable(text);
+}
+
+function isWellFormedEslintEnable(text) {
+  return WELL_FORMED_ENABLE.test(normalizeDirectiveBody(text));
 }
 
 function commentText(comment) {
   return comment.value.trim();
 }
 
-function isBeforeCode(comment, source) {
-  const start = comment.range[0];
-  return /^(?:#!.*\r?\n)?\s*$/.test(source.getText().slice(0, start));
-}
-
-function isLicenseHeader(comment, source) {
-  if (!isBeforeCode(comment, source)) {
-    return false;
-  }
-  const text = commentText(comment);
+function isLicenseText(text) {
   if (LICENSE_HEADER.test(text)) {
     return true;
   }
   return COPYRIGHT.test(text) && /\blicen[sc]e\b/i.test(text);
+}
+
+function isTripleSlashReference(comment) {
+  return comment.type === 'Line' && /^\/\s*<reference\b.*>\s*$/.test(commentText(comment));
+}
+
+function isHeaderComment(comment) {
+  if (comment.type === 'Shebang') {
+    return true;
+  }
+  if (isTripleSlashReference(comment)) {
+    return true;
+  }
+  return isLicenseText(commentText(comment));
+}
+
+function isInLeadingHeaderBlock(comment, source) {
+  if (!isHeaderComment(comment)) {
+    return false;
+  }
+  const text = source.getText();
+  let pos = 0;
+  const shebang = /^#!.*\r?\n/.exec(text);
+  if (shebang) {
+    pos = shebang[0].length;
+  }
+  const comments = source.getAllComments().slice().sort((a, b) => a.range[0] - b.range[0]);
+  for (const candidate of comments) {
+    if (candidate.range[0] < pos) {
+      continue;
+    }
+    if (!/^\s*$/.test(text.slice(pos, candidate.range[0]))) {
+      return false;
+    }
+    if (!isHeaderComment(candidate)) {
+      return false;
+    }
+    if (candidate.range[0] === comment.range[0] && candidate.range[1] === comment.range[1]) {
+      return true;
+    }
+    pos = candidate.range[1];
+  }
+  return false;
 }
 
 function isTsExpectError(comment) {
@@ -98,7 +148,7 @@ function isAllowed(comment, source) {
     return true;
   }
   const text = commentText(comment);
-  if (isLicenseHeader(comment, source)) {
+  if (isInLeadingHeaderBlock(comment, source)) {
     return true;
   }
   if (BUNDLER_MAGIC.test(text)) {
@@ -107,7 +157,7 @@ function isAllowed(comment, source) {
   if (isForbiddenEslintDisable(text)) {
     return false;
   }
-  if (isScopedEslintDisable(text) || ESLINT_ENABLE.test(text)) {
+  if (isWellFormedEslintDisable(text) || isWellFormedEslintEnable(text)) {
     return true;
   }
   if (isTsExpectError(comment)) {

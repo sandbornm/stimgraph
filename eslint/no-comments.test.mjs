@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { Linter, RuleTester } from 'eslint';
+import { ESLint, Linter, RuleTester } from 'eslint';
 import plugin, {
   collectForbiddenEslintDisableLines,
   disablesLocalNoComments,
@@ -30,7 +30,17 @@ tester.run('no-comments', noCommentsRule, {
       code: '/* Copyright (c) 2026 r2brief contributors.\n * Licensed under the MIT License. */\nexport const n = 1;\n',
     },
     {
+      code: '/* SPDX-License-Identifier: MIT */\n/* Copyright (c) 2026 contributors. Licensed under MIT. */\nexport const n = 1;\n',
+    },
+    {
+      code: '// SPDX-License-Identifier: MIT\n// SPDX-FileCopyrightText: 2026 contributors\nexport const n = 1;\n',
+    },
+    {
       code: '#!/usr/bin/env node\n/* SPDX-License-Identifier: MIT */\nexport const n = 1;\n',
+    },
+    { code: '/// <reference types="node" />\nexport const n = 1;\n' },
+    {
+      code: '/// <reference types="node" />\n// SPDX-License-Identifier: MIT\nexport const n = 1;\n',
     },
     { code: 'const x = /*#__PURE__*/ fn();\n' },
     { code: 'const x = /* #__NO_SIDE_EFFECTS__ */ fn();\n' },
@@ -65,6 +75,10 @@ tester.run('no-comments', noCommentsRule, {
       errors: [error],
     },
     {
+      code: 'export const n = 1;\n/// <reference types="node" />\n',
+      errors: [error],
+    },
+    {
       code: '// remember to add webpackChunkName here\nconst n = 1;\n',
       errors: [error],
     },
@@ -93,18 +107,24 @@ const linter = new Linter({ configType: 'flat' });
 const lintConfig = [
   {
     plugins: { local: plugin },
-    rules: { 'local/no-comments': 'error' },
+    rules: { 'local/no-comments': 'error', 'no-empty': 'error' },
     languageOptions,
   },
 ];
 
 function errors(code) {
-  return linter.verify(code, lintConfig).filter((message) => message.severity === 2);
+  return linter.verify(code, lintConfig).filter((message) => (
+    message.severity === 2 && message.ruleId === 'local/no-comments'
+  ));
 }
 
 test('scoped eslint-disable comments are allowed', () => {
   assert.equal(
     errors('// eslint-disable-next-line no-empty\nconst n = 1;\n').length,
+    0,
+  );
+  assert.equal(
+    errors('// eslint-disable-next-line no-empty -- temporary\nconst n = 1;\n').length,
     0,
   );
   assert.equal(
@@ -117,6 +137,25 @@ test('scoped eslint-disable comments are allowed', () => {
   );
   assert.equal(
     errors('/* eslint-enable no-empty */\nconst n = 1;\n').length,
+    0,
+  );
+  assert.equal(
+    errors('/* eslint-enable */\nconst n = 1;\n').length,
+    0,
+  );
+});
+
+test('eslint-disable and eslint-enable allow only rule names and an optional reason', () => {
+  assert.equal(
+    errors('// eslint-disable-next-line no-empty put the comment back\nconst n = 1;\n').length,
+    1,
+  );
+  assert.equal(
+    errors('/* eslint-enable leftover narrative */\nconst n = 1;\n').length,
+    1,
+  );
+  assert.equal(
+    errors('// eslint-disable-next-line no-empty -- keep this hole closed\nconst n = 1;\n').length,
     0,
   );
 });
@@ -135,6 +174,29 @@ test('@ts-expect-error is allowed only as a line comment with a description', ()
   assert.equal(errors('// @ts-expect-error\nconst n = 1;\n').length, 1);
   assert.equal(
     errors('/* @ts-expect-error the module shape is generated */\nconst n = 1;\n').length,
+    1,
+  );
+});
+
+test('a leading header may be a contiguous block of license and reference comments', () => {
+  assert.equal(
+    errors('/* SPDX-License-Identifier: MIT */\n/* Copyright (c) 2026 contributors. Licensed under MIT. */\nexport const n = 1;\n').length,
+    0,
+  );
+  assert.equal(
+    errors('// SPDX-License-Identifier: MIT\n// SPDX-FileCopyrightText: 2026 contributors\nexport const n = 1;\n').length,
+    0,
+  );
+  assert.equal(
+    errors('/// <reference types="node" />\nexport const n = 1;\n').length,
+    0,
+  );
+  assert.equal(
+    errors('export const n = 1;\n/// <reference types="node" />\n').length,
+    1,
+  );
+  assert.equal(
+    errors('export const n = 1;\n/* SPDX-License-Identifier: MIT */\n').length,
     1,
   );
 });
@@ -232,8 +294,25 @@ test('the repo scan root is decoded with fileURLToPath', () => {
   );
 });
 
+test('the no-comments rule module loads as native ESM', async () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const ruleUrl = new URL('./no-comments.js', import.meta.url);
+  assert.ok(pkg.type === 'module' || ruleUrl.pathname.endsWith('.mjs'));
+  const loaded = await import(ruleUrl.href);
+  assert.equal(typeof loaded.noCommentsRule.create, 'function');
+  assert.equal(typeof loaded.default.rules['no-comments'].create, 'function');
+});
+
+test('the no-comments rule does not run on CSS files', async () => {
+  const eslint = new ESLint();
+  const cfg = await eslint.calculateConfigForFile(
+    join(scanRootFromImportMetaUrl(import.meta.url), 'app/globals.css'),
+  );
+  assert.equal(cfg?.rules?.['local/no-comments'], undefined);
+});
+
 test('source files do not use unscoped eslint-disable directives or disable local/no-comments', () => {
-  const skip = new Set(['node_modules', 'dist', '.next', '.git', '.wrangler']);
+  const skip = new Set(['node_modules', 'dist', 'out', 'build', '.next', '.git', '.wrangler']);
   const files = [];
   function walk(dir) {
     for (const name of readdirSync(dir)) {
