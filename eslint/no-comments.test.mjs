@@ -4,15 +4,20 @@ import { join } from 'node:path';
 import { describe, it, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Linter, RuleTester } from 'eslint';
-import plugin, { isUnscopedEslintDisable, noCommentsRule } from './no-comments.js';
+import plugin, {
+  disablesLocalNoComments,
+  isForbiddenEslintDisable,
+  isUnscopedEslintDisable,
+  noCommentsRule,
+} from './no-comments.js';
 
 RuleTester.describe = describe;
 RuleTester.it = it;
 RuleTester.itOnly = it.only;
 
-const tester = new RuleTester({
-  languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
-});
+const languageOptions = { ecmaVersion: 'latest', sourceType: 'module' };
+
+const tester = new RuleTester({ languageOptions });
 
 const error = { messageId: 'noComments' };
 
@@ -72,12 +77,16 @@ test('RuleTester uses node:test describe and it', () => {
   assert.equal(RuleTester.itOnly, it.only);
 });
 
+test('RuleTester and Linter use ecmaVersion latest so shebang fixtures parse', () => {
+  assert.equal(languageOptions.ecmaVersion, 'latest');
+});
+
 const linter = new Linter({ configType: 'flat' });
 const lintConfig = [
   {
     plugins: { local: plugin },
     rules: { 'local/no-comments': 'error' },
-    languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
+    languageOptions,
   },
 ];
 
@@ -87,19 +96,19 @@ function errors(code) {
 
 test('scoped eslint-disable comments are allowed', () => {
   assert.equal(
-    errors('// eslint-disable-next-line local/no-comments\nconst n = 1;\n').length,
+    errors('// eslint-disable-next-line no-empty\nconst n = 1;\n').length,
     0,
   );
   assert.equal(
-    errors('/* eslint-disable local/no-comments */\nconst n = 1;\n').length,
+    errors('/* eslint-disable no-empty */\nconst n = 1;\n').length,
     0,
   );
   assert.equal(
-    errors('const n = 1; // eslint-disable-line local/no-comments\n').length,
+    errors('const n = 1; // eslint-disable-line no-empty\n').length,
     0,
   );
   assert.equal(
-    errors('/* eslint-enable local/no-comments */\nconst n = 1;\n').length,
+    errors('/* eslint-enable no-empty */\nconst n = 1;\n').length,
     0,
   );
 });
@@ -108,6 +117,40 @@ test('an unscoped eslint-disable-next-line is reported', () => {
   const messages = errors('// eslint-disable-next-line\nconst n = 1;\n');
   assert.equal(messages.length, 1);
   assert.equal(messages[0].ruleId, 'local/no-comments');
+});
+
+test('a disable of local/no-comments is rejected', () => {
+  const nextLine = errors('// eslint-disable-next-line local/no-comments\nconst n = 1;\n');
+  assert.equal(nextLine.length, 1);
+  assert.equal(nextLine[0].ruleId, 'local/no-comments');
+
+  const blockNext = errors('/* eslint-disable-next-line local/no-comments */\nconst n = 1;\n');
+  assert.equal(blockNext.length, 1);
+  assert.equal(blockNext[0].ruleId, 'local/no-comments');
+
+  assert.equal(disablesLocalNoComments('/* eslint-disable local/no-comments */'), true);
+  assert.equal(disablesLocalNoComments('/* eslint-disable no-empty, local/no-comments */'), true);
+  assert.equal(disablesLocalNoComments('const n = 1; // eslint-disable-line local/no-comments'), true);
+  assert.equal(disablesLocalNoComments('// eslint-disable-next-line local/no-comments -- temporary'), true);
+  assert.equal(disablesLocalNoComments('/* eslint-disable no-empty */'), false);
+  assert.equal(disablesLocalNoComments('/* eslint-enable local/no-comments */'), false);
+
+  assert.deepEqual(
+    forbiddenEslintDisableLineNumbers('/* eslint-disable local/no-comments */\nconst n = 1;\n'),
+    [1],
+  );
+  assert.deepEqual(
+    forbiddenEslintDisableLineNumbers('const n = 1; // eslint-disable-line local/no-comments\n'),
+    [1],
+  );
+  assert.deepEqual(
+    forbiddenEslintDisableLineNumbers('/* eslint-disable no-empty, local/no-comments */\n'),
+    [1],
+  );
+  assert.deepEqual(
+    forbiddenEslintDisableLineNumbers('const n = 1; // eslint-disable-line no-empty\n'),
+    [],
+  );
 });
 
 test('scoped eslint-disable-next-line directives are not treated as unscoped', () => {
@@ -120,13 +163,13 @@ test('scoped eslint-disable-next-line directives are not treated as unscoped', (
   assert.equal(isUnscopedEslintDisable('/* eslint-disable */'), true);
 });
 
-function unscopedEslintDisableLineNumbers(source) {
+function forbiddenEslintDisableLineNumbers(source) {
   const hits = [];
   for (const [index, line] of source.split('\n').entries()) {
     if (!line.includes('//') && !line.includes('/*') && !line.includes('*/')) {
       continue;
     }
-    if (isUnscopedEslintDisable(line)) {
+    if (isForbiddenEslintDisable(line)) {
       hits.push(index + 1);
     }
   }
@@ -139,19 +182,19 @@ function scanRootFromImportMetaUrl(importMetaUrl) {
 
 test('the source scan catches an unscoped trailing eslint-disable-line', () => {
   assert.deepEqual(
-    unscopedEslintDisableLineNumbers('const n = 1; // eslint-disable-line\n'),
+    forbiddenEslintDisableLineNumbers('const n = 1; // eslint-disable-line\n'),
     [1],
   );
   assert.deepEqual(
-    unscopedEslintDisableLineNumbers('const n = 1; /* eslint-disable */\n'),
+    forbiddenEslintDisableLineNumbers('const n = 1; /* eslint-disable */\n'),
     [1],
   );
   assert.deepEqual(
-    unscopedEslintDisableLineNumbers('const n = 1; // eslint-disable-line no-empty\n'),
+    forbiddenEslintDisableLineNumbers('const n = 1; // eslint-disable-line no-empty\n'),
     [],
   );
   assert.deepEqual(
-    unscopedEslintDisableLineNumbers('const n = 1;\n'),
+    forbiddenEslintDisableLineNumbers('const n = 1;\n'),
     [],
   );
 });
@@ -167,7 +210,7 @@ test('the repo scan root is decoded with fileURLToPath', () => {
   );
 });
 
-test('source files do not use unscoped eslint-disable directives', () => {
+test('source files do not use unscoped eslint-disable directives or disable local/no-comments', () => {
   const skip = new Set(['node_modules', 'dist', '.next', '.git', '.wrangler']);
   const files = [];
   function walk(dir) {
@@ -185,7 +228,7 @@ test('source files do not use unscoped eslint-disable directives', () => {
   const hits = [];
   for (const path of files) {
     const source = readFileSync(path, 'utf8');
-    if (unscopedEslintDisableLineNumbers(source).length > 0) {
+    if (forbiddenEslintDisableLineNumbers(source).length > 0) {
       hits.push(path);
     }
   }

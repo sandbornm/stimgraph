@@ -6,7 +6,7 @@ const BUNDLER_MAGIC =
 const ESLINT_ENABLE = /^\s*eslint-enable\b/;
 const TS_EXPECT_ERROR = /^\s*@ts-expect-error\b/;
 
-export function isUnscopedEslintDisable(text) {
+function eslintDisableRuleList(text) {
   const comment = /(?:\/\/|\/\*)\s*(eslint-disable(?:-next-line|-line)?(?![\w-])[\s\S]*)$/.exec(
     text.trim(),
   );
@@ -16,15 +16,32 @@ export function isUnscopedEslintDisable(text) {
     .replace(/\s*\*\/$/, '');
   const match = /^eslint-disable(?:-next-line|-line)?(?![\w-])([\s\S]*)$/.exec(body);
   if (!match) {
+    return null;
+  }
+  return match[1].replace(/--[\s\S]*$/, '').trim();
+}
+
+export function isUnscopedEslintDisable(text) {
+  const list = eslintDisableRuleList(text);
+  return list !== null && list.length === 0;
+}
+
+export function disablesLocalNoComments(text) {
+  const list = eslintDisableRuleList(text);
+  if (!list) {
     return false;
   }
-  return match[1].replace(/--[\s\S]*$/, '').trim().length === 0;
+  return list.split(',').some((name) => name.trim() === 'local/no-comments');
+}
+
+export function isForbiddenEslintDisable(text) {
+  return isUnscopedEslintDisable(text) || disablesLocalNoComments(text);
 }
 
 function isScopedEslintDisable(text) {
   const body = text.trim();
   return /^eslint-disable(?:-next-line|-line)?(?![\w-])\s+\S/.test(body)
-    && !isUnscopedEslintDisable(body);
+    && !isForbiddenEslintDisable(body);
 }
 
 function commentText(comment) {
