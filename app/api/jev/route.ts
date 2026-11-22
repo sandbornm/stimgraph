@@ -9,7 +9,6 @@ export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store', Vary: 'Cookie, Tailscale-User-Login' };
 const denied = () => NextResponse.json({ error: 'An authenticated owner is required.' }, { status: 401, headers });
 
-/** Status and the editable topic list. */
 export async function GET(request: NextRequest) {
   const ownerId = await resolveOwnerId(request);
   if (!ownerId) return denied();
@@ -19,7 +18,6 @@ export async function GET(request: NextRequest) {
     labeled: counts?.labeled ?? 0, accepted: counts?.accepted ?? 0 }, { headers });
 }
 
-/** Replace the topic list: body { topics: { label: description, ... } }. Changing it relabels on the next run. */
 export async function PUT(request: NextRequest) {
   const ownerId = await resolveOwnerId(request);
   if (!ownerId) return denied();
@@ -31,7 +29,6 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-/** Label pending bookmarks now (used by `pnpm jev:label`). Body { limit?: number }. */
 export async function POST(request: NextRequest) {
   const ownerId = await resolveOwnerId(request);
   if (!ownerId) return denied();

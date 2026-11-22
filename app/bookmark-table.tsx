@@ -12,7 +12,6 @@ type Props = {
 };
 
 const PAGE = 100;
-/** Topic source is encoded in the id prefix: jev- (Jev label), kw- (keyword fallback), else hashtag/Grok. */
 const chipSource = (id: string) => (id.startsWith('jev-') ? ' jev' : id.startsWith('kw-') ? ' kw' : '');
 const chipTitle = (id: string) => (id.startsWith('jev-') ? 'Topic labeled by Jev (TypeSafe AI)' : id.startsWith('kw-') ? 'Keyword topic' : 'Hashtag or Grok topic');
 const dateFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });

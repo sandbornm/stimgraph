@@ -1,4 +1,3 @@
-// Copy into app/api/test-research/route.ts only in the isolated test preview.
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { getD1 } from '@/db';

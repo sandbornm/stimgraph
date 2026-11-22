@@ -17,3 +17,7 @@ export function retryTime(response: Response, now = Date.now()) {
   const after = retry ? (Number.isFinite(seconds) ? now + seconds * 1000 : Date.parse(retry)) : 0;
   return Math.max(now, Number.isFinite(after) ? after : 0, Number.isFinite(reset) ? reset : 0);
 }
+
+export function refreshErrorAction(error: unknown): 'delete' | 'rethrow' {
+  return error instanceof XRequestError && error.revoked ? 'delete' : 'rethrow';
+}

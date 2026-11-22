@@ -47,9 +47,7 @@ ${Object.entries(variables).map(([key, value]) => `<key>${key}</key><string>${xm
 <key>StandardErrorPath</key><string>${xml(resolve(runtime, 'service-error.log'))}</string>
 </dict></plist>
 `, { mode: 0o600 });
-// Only restart this app's label, leaving every other LaunchAgent alone.
-try { execFileSync('launchctl', ['bootout', `${domain}/${label}`], { stdio: 'ignore' }); } catch { /* First install. */ }
-// bootout may return before launchd finishes removing the old registration.
+try { execFileSync('launchctl', ['bootout', `${domain}/${label}`], { stdio: 'ignore' }); } catch { }
 for (let attempt = 0; ; attempt++) {
   try {
     execFileSync('launchctl', ['bootstrap', domain, plist], { stdio: 'pipe' });

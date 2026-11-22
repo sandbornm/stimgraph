@@ -51,7 +51,6 @@ export async function POST(request: NextRequest) {
     live = body.live === true;
     stream = body.stream === true;
   } catch {
-    // The default limit is intentionally conservative.
   }
   const limit = Math.max(1, Math.min(live ? 40 : 1000, Math.floor(requestedLimit)));
 

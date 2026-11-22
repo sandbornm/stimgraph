@@ -5,7 +5,6 @@ import { clampLimit, filterRows, topicCounts } from '@/lib/bookmark-table';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/agent/bookmarks?q=&topic=a,b&author=&limit=&offset=
 export async function GET(request: NextRequest) {
   const owner = await resolveAgentOwner(request);
   if (!owner) return agentDenied();

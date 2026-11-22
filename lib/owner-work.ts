@@ -1,5 +1,3 @@
-// The personal deployment uses one server process. Serialize deletion with its
-// background importer so an in-flight fetch cannot recreate deleted data.
 const state = globalThis as typeof globalThis & { stimgraphOwnerWork?: Map<string, Promise<unknown>> };
 const work = state.stimgraphOwnerWork ??= new Map();
 

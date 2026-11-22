@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// First-run helper. Checks prerequisites and creates .env.local from .env.example.
-// Never reads or prints the contents of .env.local. Safe to re-run.
 import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';

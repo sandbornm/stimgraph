@@ -6,15 +6,6 @@ import { getRuntimeValue } from './runtime-env';
 import { tailnetAgentAllowed } from './agent-gate';
 import { keywordTopics, type TableRow } from './bookmark-table';
 
-/**
- * Who may read through /api/agent/*:
- *  1. A browser that already holds the X session cookie (the UI).
- *  2. A tailnet caller: Tailscale Serve sets `Tailscale-User-Login` on proxied
- *     requests and the Host is the *.ts.net name. If STIMGRAPH_AGENT_LOGINS is set
- *     (comma-separated logins), the caller must be on that list.
- *     Path 2 applies only when STIMGRAPH_TAILNET=true; set STIMGRAPH_AGENT_API=off to disable it.
- * Responses are read-only and never contain tokens, cookies or secrets.
- */
 export async function resolveAgentOwner(request: NextRequest): Promise<{ ownerId: string; via: 'session' | 'tailnet' } | null> {
   const active = await getActiveXSession(request);
   if (active) return { ownerId: active.session.profile.id, via: 'session' };

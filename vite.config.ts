@@ -4,19 +4,19 @@ import { existsSync } from 'node:fs';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 
-// Optional hosted-preview config. It holds a hosting project ID, so it is
-// gitignored; the `sites` plugin is enabled only when the file exists locally.
 const hasHostingConfig = existsSync('./.openai/hosting.json');
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
 
-// Local bindings only: D1 as `DB`, no R2. No hosting account/project IDs live in this repo.
 const d1: string | null = 'DB';
 const r2: string | null = null;
 
-// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
-const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+export const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
+
+export function seatbeltServerWatch() {
+  return { watch: { useFsEvents: false, usePolling: true } };
+}
 
 const localBindingConfig = {
   main: './worker.ts',
@@ -41,14 +41,11 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
-  // Keep Wrangler and Miniflare state project-local. These are non-secret tool
-  // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
   process.env.WRANGLER_LOG_PATH ??= '.wrangler/logs';
   process.env.MINIFLARE_REGISTRY_PATH ??= '.wrangler/registry';
   process.env.CLOUDFLARE_DEV_REGISTRY_PATH ??= '.wrangler/registry';
 
-  // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
@@ -57,9 +54,7 @@ export default defineConfig(async () => {
       host: '127.0.0.1',
       port: 3001,
       strictPort: true,
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
-        : {}),
+      ...(isCodexSeatbeltSandbox ? seatbeltServerWatch() : {}),
     },
     plugins: [
       vinext(),

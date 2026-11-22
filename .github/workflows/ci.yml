@@ -14,7 +14,6 @@ concurrency:
 
 env:
   NEXT_TELEMETRY_DISABLED: '1'
-  # Inert values only; CI never sees real credentials.
   X_CLIENT_ID: stimgraph-inert-test
   X_CLIENT_SECRET: stimgraph-inert-test-secret
   X_REDIRECT_URI: http://127.0.0.1:3012/api/auth/x/callback
