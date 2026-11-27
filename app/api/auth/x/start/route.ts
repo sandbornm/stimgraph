@@ -1,7 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { saveOauthPending } from '@/db/storage';
-import { requireRuntimeValue } from '@/lib/runtime-env';
+import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
+import { xAuthConfigured } from '@/lib/x-auth-config';
+import { X_OAUTH_SCOPE } from '@/lib/x-oauth';
 import { createPkceChallenge, randomBase64Url, X_STATE_COOKIE } from '@/lib/x-session';
 import { sessionCookieOptions } from '@/lib/x-auth-server';
 
@@ -9,6 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
+    if (!xAuthConfigured(getRuntimeValue)) throw new Error('Missing required server configuration');
     const clientId = requireRuntimeValue('X_CLIENT_ID');
     const redirectUri = requireRuntimeValue('X_REDIRECT_URI');
     const state = randomBase64Url();
@@ -23,7 +26,7 @@ export async function GET(request: NextRequest) {
       response_type: 'code',
       client_id: clientId,
       redirect_uri: redirectUri,
-      scope: 'tweet.read users.read bookmark.read follows.read offline.access',
+      scope: X_OAUTH_SCOPE,
       state,
       code_challenge: challenge,
       code_challenge_method: 'S256',

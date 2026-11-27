@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadLocalCredentials } from './local-credentials.ts';
 
-const names = ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'XAI_API_KEY', 'TYPESAFE_API_KEY'];
+const names = ['X_CLIENT_ID', 'X_CLIENT_SECRET', 'STIMGRAPH_TOKEN_KEY', 'XAI_API_KEY', 'TYPESAFE_API_KEY'];
 
 function isolateEnv(run: () => void) {
   const previous = new Map(names.map((name) => [name, process.env[name]]));

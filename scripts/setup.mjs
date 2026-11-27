@@ -30,7 +30,8 @@ else { copyFileSync(example, local); ok('created .env.local from .env.example');
 console.log('');
 if (failed) { console.log('Fix the FAIL lines above, then run this again.'); process.exit(1); }
 console.log(`Next:
-  1. Edit .env.local: set X_CLIENT_ID, X_CLIENT_SECRET (from your X developer app).
+  1. Edit .env.local: set X_CLIENT_ID, X_CLIENT_SECRET (from your X developer app)
+     and STIMGRAPH_TOKEN_KEY (openssl rand -base64 32).
      Without them the app still runs and shows the built-in DEMO collection.
   2. pnpm install --frozen-lockfile
   3. pnpm dev        ->  http://127.0.0.1:3001`);

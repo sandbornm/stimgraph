@@ -6,6 +6,7 @@ import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
 import { hostFromUrl, urlsFromBookmark } from '@/lib/rss-probe';
 import type { StoredFollow } from '@/lib/x-following';
+import { ownerDeleteStatements } from '@/lib/owner-tables';
 import type { XProfile } from '@/lib/x-session';
 
 export type StoredBookmark = {
@@ -256,6 +257,14 @@ export async function loadXSessionRecord(id: string): Promise<{ payload: string;
 export async function deleteXSessionRecord(id: string) {
   await ensureSchema();
   await getD1().prepare('DELETE FROM x_sessions WHERE id = ?').bind(id).run();
+}
+
+export async function loadOwnerXSessionPayloads(ownerId: string): Promise<string[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT payload FROM x_sessions WHERE owner_id = ?')
+    .bind(ownerId)
+    .all<{ payload: string }>();
+  return rows.results.map((row) => row.payload);
 }
 
 function topicId(label: string) {
@@ -800,25 +809,7 @@ export async function deleteOwnerData(ownerId: string) {
   return withOwnerWork(ownerId, async () => {
     await ensureSchema();
     const d1 = getD1();
-    await d1.batch([
-      d1.prepare('DELETE FROM bookmark_observations WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmark_sync_state WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM jev_labels WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM jev_topic_config WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM trajectories WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bridge_requests WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM research_cards WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM research_requests WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
-    ]);
+    await d1.batch(ownerDeleteStatements().map((sql) => d1.prepare(sql).bind(ownerId)));
   });
 }
 

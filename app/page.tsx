@@ -1,6 +1,7 @@
 'use client';
 
 import { lazy, memo, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { DELETE_ACCOUNT_CONFIRMATION } from '@/lib/delete-account';
 import { X_DISCLAIMER } from '@/lib/legal';
 import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import {
@@ -2261,11 +2262,15 @@ export default function Home() {
       let inserted = 0;
       let following = 0;
       let followingError = '';
+      let followingReported = false;
       await readNdjson<SyncStreamEvent>(response, async (event) => {
         if (event.type === 'error') throw new Error(event.error ?? 'Sync failed.');
         imported = event.imported ?? imported;
         inserted = event.inserted ?? inserted;
-        if (event.following != null) following = event.following;
+        if (event.following != null) {
+          following = event.following;
+          followingReported = true;
+        }
         if (event.followingError) followingError = event.followingError;
         const authors = (event.authors ?? []).map((handle) => `@${handle}`).join('  ');
         if (event.type === 'following') {
@@ -2305,13 +2310,15 @@ export default function Home() {
       setLiveInserted((count) => count + inserted);
       setSyncMessage(followingError
         ? `${imported} bookmarks mapped · ${inserted} new. ${followingError}`
-        : `${imported} bookmarks mapped · ${inserted} new · ${following} following.`);
+        : followingReported
+          ? `${imported} bookmarks mapped · ${inserted} new · ${following} following.`
+          : `${imported} bookmarks mapped · ${inserted} new.`);
       setActivity({
         kind: 'sync',
         label: 'Map updated',
         current: imported,
         total: imported || 600,
-        detail: followingError ? followingError : `${inserted} new saves · ${following} following`,
+        detail: followingError ? followingError : followingReported ? `${inserted} new saves · ${following} following` : `${inserted} new saves`,
       });
       window.setTimeout(() => setActivity((current) => current?.kind === 'sync' ? null : current), 1800);
     } catch (error) {
@@ -2677,18 +2684,21 @@ export default function Home() {
     setPermissionsOpen(false);
   };
 
-  const deleteLocalData = async () => {
-    const confirmed = window.confirm('Delete this local Stimgraph map, saved trajectories, and disconnect X? This cannot be undone.');
+  const deleteAccount = async () => {
+    const confirmed = window.confirm('Delete this Stimgraph account, including the local map and the X connection? This cannot be undone.');
     if (!confirmed) return;
-    const response = await fetch('/api/data', { method: 'DELETE' });
+    const response = await fetch('/api/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: DELETE_ACCOUNT_CONFIRMATION }),
+    });
     if (!response.ok) {
       setSyncState('error');
-      setSyncMessage('The local map could not be deleted.');
+      setSyncMessage('The account could not be deleted.');
       return;
     }
-    setSyncMessage('');
-    setEnrichMessage('');
-    await disconnect();
+    window.history.replaceState(null, '', '/');
+    window.location.reload();
   };
 
   const connectX = async () => {
@@ -3054,21 +3064,20 @@ export default function Home() {
               <p>{mode === 'shared'
                 ? 'People and topics only. Bookmark text is not in this link. Combine with the demo, or connect X and it will lay onto your map when you come back.'
                 : connection.connected
-                ? (connection.backgroundPolling ? 'Bookmarks sync in the background every six hours, even with this tab closed. This map refreshes automatically.' : 'Sync pulls bookmarks and who you follow. Live watch of new saves is optional and off by default.')
-                : 'Read-only: bookmarks, following, posts, profiles. It cannot post, like, follow, or change bookmarks.'}</p>
+                ? (connection.backgroundPolling ? 'Bookmarks sync in the background every six hours, even with this tab closed. This map refreshes automatically.' : 'Sync pulls bookmarks. Live watch of new saves is optional and off by default.')
+                : 'Read-only: bookmarks, posts, and profiles. It cannot post, like, follow, or change bookmarks.'}</p>
               {connection.connected ? (
                 <button className="wide-connect" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
                   {syncState === 'syncing'
                     ? (activity?.kind === 'sync' && activity.current != null
                       ? `Mapping ${activity.current} of ${activity.total}…`
                       : 'Opening bookmarks…')
-                    : 'Sync bookmarks and following'}
+                    : 'Sync bookmarks'}
                 </button>
               ) : (
                 <button className="wide-connect" type="button" onClick={() => void connectX()} disabled={connecting}>{connecting ? 'Checking X…' : 'Review and connect X'}</button>
               )}
               {syncMessage ? <p className={`sync-message ${syncState}`}>{syncMessage}</p> : null}
-              {syncMessage.includes('Reconnect X') ? <a className="node-link" href="/api/auth/x/start">Reconnect X to grant follows.read ↗</a> : null}
               {connection.connected && mode === 'live' && !connection.backgroundPolling ? (
                 <button
                   className={`tuning-toggle ${liveWatch ? 'active' : ''}`}
@@ -3122,8 +3131,8 @@ export default function Home() {
                 <section className="data-controls" aria-label="Local data controls">
                   <p className="eyebrow">DATA CONTROLS</p>
                   <button type="button" onClick={disconnect}>Disconnect browser session</button>
-                  <button className="danger-link" type="button" onClick={deleteLocalData}>Delete local map + disconnect</button>
-                  <small>Disconnecting leaves your local map in place. Deleting removes it from this app. Revoke the app itself from X account settings if you also want to withdraw X consent.</small>
+                  <button className="danger-link" type="button" onClick={deleteAccount}>Delete account</button>
+                  <small>Disconnecting leaves your local map in place. Deleting the account removes the local map and asks X to revoke this connection.</small>
                 </section>
               ) : null}
 

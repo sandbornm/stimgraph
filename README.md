@@ -40,7 +40,7 @@ pnpm dev                         # http://127.0.0.1:3001
 
 `pnpm run setup` (equivalently `node scripts/setup.mjs`) never overwrites an existing `.env.local` and never prints its contents. Dependency install scripts are disabled by `.npmrc`; that is intentional.
 
-To import your own bookmarks, fill in `X_CLIENT_ID` and `X_CLIENT_SECRET` in `.env.local`, restart `pnpm dev`, open the app, and press **Connect X**.
+To import your own bookmarks, fill in `X_CLIENT_ID`, `X_CLIENT_SECRET`, and `STIMGRAPH_TOKEN_KEY` in `.env.local`, restart `pnpm dev`, open the app, and press **Connect X**.
 
 ## Two ways to run it
 
@@ -56,9 +56,9 @@ To import your own bookmarks, fill in `X_CLIENT_ID` and `X_CLIENT_SECRET` in `.e
 
 ## Connecting X
 
-1. **Create your own X developer app** in the [X Developer Console](https://console.x.com/). X API access is paid and its plans/pricing change; check the console before relying on it. Every bookmark sync, follow import, and background poll consumes X reads billed to *your* app.
+1. **Create your own X developer app** in the [X Developer Console](https://console.x.com/). X API access is paid and its plans/pricing change; check the console before relying on it. Every bookmark sync and background poll consumes X reads billed to *your* app.
    - Type: confidential **Web App, Automated App or Bot**. Permissions: **Read**.
-   - OAuth 2.0 scopes requested by Stimgraph (exactly): `tweet.read users.read bookmark.read follows.read offline.access`. No write scopes.
+   - OAuth 2.0 scopes requested by Stimgraph (exactly): `tweet.read users.read bookmark.read offline.access`. No write scopes.
    - Callback URL (must match `X_REDIRECT_URI` exactly):
      - Development: `http://127.0.0.1:3001/api/auth/x/callback`
      - Always-on: `https://<host>.<tailnet>.ts.net/api/auth/x/callback`
@@ -72,8 +72,9 @@ All variables are listed, with comments, in [.env.example](.env.example). For de
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `X_CLIENT_ID` | yes | — | OAuth 2.0 client ID of your X app |
-| `X_CLIENT_SECRET` | yes | — | OAuth 2.0 client secret; also encrypts stored X tokens (changing it forces reconnect) |
+| `X_CLIENT_SECRET` | yes | — | OAuth 2.0 client secret |
 | `X_REDIRECT_URI` | yes | — | Exact callback URL registered in the X app |
+| `STIMGRAPH_TOKEN_KEY` | yes | — | 32 random bytes, base64 or base64url. Encrypts stored X tokens. Generate with `openssl rand -base64 32`. Changing it after tokens are re-sealed forces reconnect |
 | `XAI_API_KEY` | no | empty (Grok features off) | xAI key for optional Grok features |
 | `TYPESAFE_API_KEY` | no | empty (Jev labeling off) | TypeSafe AI key for optional Jev topic labeling |
 | `NEXT_PUBLIC_SITE_URL` | no | `http://127.0.0.1:3001` | Public URL for social metadata |
@@ -110,7 +111,7 @@ If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.T
 
 ## Where data lives
 
-- Bookmarks, topics, OAuth sessions (tokens encrypted with `X_CLIENT_SECRET`), trajectories, and research cards: the local database (see table above). Protect it and its backups; enable FileVault on the always-on Mac.
+- Bookmarks, topics, OAuth sessions (tokens encrypted with `STIMGRAPH_TOKEN_KEY`), trajectories, and research cards: the local database (see table above). Protect it and its backups; enable FileVault on the always-on Mac.
 - The browser holds only an httpOnly session cookie (`stim_x_session`, 180 days) and UI preferences.
 - Nothing is sent to xAI or Crossref unless you press the corresponding action; see the permission boundary below.
 
@@ -127,12 +128,11 @@ If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.T
 Stimgraph requests these OAuth scopes:
 
 - `bookmark.read` to read bookmarks when Sync is pressed.
-- `follows.read` to read accounts you follow when Sync is pressed.
 - `tweet.read` to read the saved post text.
 - `users.read` to identify authors.
 - `offline.access` to refresh the connection when the user requests a later sync.
 
-It does not request write scopes and cannot post, like, follow, or change bookmarks. Development import starts on request; the opt-in private deployment in [DEPLOYMENT.md](docs/DEPLOYMENT.md) polls connected accounts in the background. If you connected before following import existed, reconnect so X can grant `follows.read`. In the [X Developer Console](https://console.x.com/), add `follows.read` to the app’s user-authentication scopes.
+It does not request write scopes and cannot post, like, follow, or change bookmarks. Development import starts on request; the opt-in private deployment in [DEPLOYMENT.md](docs/DEPLOYMENT.md) polls connected accounts in the background. Accounts you already imported stay on the map. Sync does not read the following list.
 
 Grok enrichment is a separate action. Pressing it sends the next 40 bookmark texts and author handles to xAI; it never sends the X access token. Grok scout sends only topic labels and frequent author handles, then searches X. Requests use `store: false`. xAI documents a default 30-day abuse-monitoring retention period unless the API team has Zero Data Retention enabled, and says API inputs and outputs are not used for training without explicit permission. See [xAI API security](https://docs.x.ai/developers/faq/security) and [current pricing](https://docs.x.ai/developers/pricing).
 
@@ -179,7 +179,7 @@ CI (`.github/workflows/ci.yml`) runs `check` + build on Node 22, the local SQLit
 | `Port 3001 is already in use` | Something else (often the always-on service) is listening. Stop it (`lsof -i :3001`), or for a quick DEMO-only look use `pnpm dev --port 3013`. Connecting X needs port 3001, because the callback URL must match exactly. |
 | X login fails with a callback / redirect error | `X_REDIRECT_URI` in `.env.local` must match the callback URL in your X app **character for character** (use `127.0.0.1`, not `localhost`). |
 | App still shows DEMO after connecting | Sync runs on request: press **Sync**. X only returns your newest ~800 bookmarks. |
-| Every request after a change says "reconnect" | You changed `X_CLIENT_SECRET`; stored tokens are encrypted with it. Press Connect X again. |
+| Every request after a change says "reconnect" | You changed `STIMGRAPH_TOKEN_KEY` after tokens were re-sealed, or you changed `X_CLIENT_SECRET` before an older row was read. Press Connect X again. |
 | Grok actions fail or say they are not configured | `XAI_API_KEY` is empty. That is fine; everything else works. |
 | `pnpm install` warns that build scripts were ignored | Expected: `.npmrc` sets `ignore-scripts=true`. |
 | `pnpm run typecheck` errors in `.next/types` after a build | Stale generated types: `rm -rf .next` and re-run. |

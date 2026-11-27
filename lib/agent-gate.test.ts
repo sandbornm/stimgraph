@@ -20,6 +20,18 @@ test('agent API can be disabled and restricted to an allowlist', () => {
   assert.equal(tailnetAgentAllowed(h(ok), { ...tailnet, logins: 'other@x.com' }), false);
 });
 
+test('a forged Tailscale-User-Login grants nothing when STIMGRAPH_TAILNET is unset', () => {
+  const forged = h({
+    host: 'mac.example.ts.net',
+    'x-forwarded-host': 'mac.example.ts.net',
+    'tailscale-user-login': 'owner@example.com',
+  });
+  for (const tailnet of [undefined, '', 'false', 'TRUE', '1']) {
+    assert.equal(tailnetAgentAllowed(forged, { tailnet, logins: 'owner@example.com' }), false);
+  }
+  assert.equal(tailnetAgentAllowed(forged, {}), false);
+});
+
 test('a Tailscale-User-Login header is ignored unless tailnet mode is explicitly enabled', () => {
   const spoofed = h({ host: 'mac.example.ts.net', 'tailscale-user-login': 'attacker@example.com' });
   assert.equal(tailnetAgentAllowed(spoofed, { tailnet: 'false' }), false);

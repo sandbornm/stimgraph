@@ -77,6 +77,37 @@ export async function refreshXSession(session: XSession): Promise<XSession> {
   };
 }
 
+const X_REVOKE_URL = 'https://api.x.com/2/oauth2/revoke';
+
+async function postRevocation(token: string, tokenTypeHint: 'refresh_token' | 'access_token') {
+  const response = await fetch(X_REVOKE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: basicAuthorization(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ token, token_type_hint: tokenTypeHint }),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5_000),
+  });
+  await response.arrayBuffer().catch(() => undefined);
+}
+
+export async function revokeXSession(session: { accessToken: string; refreshToken?: string }) {
+  if (session.refreshToken) {
+    try {
+      await postRevocation(session.refreshToken, 'refresh_token');
+    } catch {
+      void 0;
+    }
+  }
+  try {
+    await postRevocation(session.accessToken, 'access_token');
+  } catch {
+    void 0;
+  }
+}
+
 export async function fetchXProfile(accessToken: string): Promise<XProfile> {
   const response = await fetch(
     'https://api.x.com/2/users/me?user.fields=id,name,username,profile_image_url',

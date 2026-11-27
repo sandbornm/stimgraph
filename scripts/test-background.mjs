@@ -19,6 +19,7 @@ const options = {
   host: '127.0.0.1', port: 0, log: new Log(LogLevel.ERROR),
   workers: [{ name: 'stimgraph', ...builtWorkerOptions(process.cwd()),
     bindings: { X_CLIENT_ID: 'stimgraph-inert-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret',
+      STIMGRAPH_TOKEN_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       X_REDIRECT_URI: `${origin}/api/auth/x/callback`, STIMGRAPH_TAILNET: 'true',
       STIMGRAPH_PUBLIC_ORIGIN: origin, STIMGRAPH_TAILNET_LOGIN: login, STIMGRAPH_BACKGROUND_POLL: 'true' },
     d1Databases: { DB: 'background-test' },

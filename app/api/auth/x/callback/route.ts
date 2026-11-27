@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server';
 import { replaceXSessionRecord, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
 import { sessionCookieOptions } from '@/lib/x-auth-server';
 import { requestOrigin } from '@/lib/request-origin';
-import { requireRuntimeValue } from '@/lib/runtime-env';
+import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
+import { xAuthConfigured } from '@/lib/x-auth-config';
 import { exchangeAuthorizationCode, fetchXProfile } from '@/lib/x-api';
 import { randomBase64Url, sealXSession, X_SESSION_COOKIE, X_STATE_COOKIE } from '@/lib/x-session';
 
@@ -50,6 +51,12 @@ function connectedPage(request: NextRequest, sessionId: string, returnPath: stri
 }
 
 export async function GET(request: NextRequest) {
+  if (!xAuthConfigured(getRuntimeValue)) {
+    return NextResponse.json(
+      { error: 'The X connection is not configured on the server.' },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    );
+  }
   const code = request.nextUrl.searchParams.get('code');
   const returnedState = request.nextUrl.searchParams.get('state');
   const browserState = request.cookies.get(X_STATE_COOKIE)?.value;

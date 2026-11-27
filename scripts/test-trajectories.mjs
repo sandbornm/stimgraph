@@ -67,11 +67,12 @@ try {
   const page = await request('/');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /CONCEPT TRAJECTORY/);
-  assert.equal((await request('/api/data', cookieA, { method: 'DELETE' })).status, 200);
+  assert.equal((await request('/api/data', cookieA, { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) })).status, 200);
   const afterDelete = await (await request('/api/trajectories', cookieA)).json();
   assert.deepEqual(afterDelete.trajectories, []);
   console.log('Trajectory API passed: persistence, account isolation, validation, private caching, separate versions, deletion, and page rendering.');
 } finally {
-  await request('/api/data', cookieA, { method: 'DELETE' });
-  await request('/api/data', cookieB, { method: 'DELETE' });
+  const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
+  await request('/api/data', cookieA, deleteAccount);
+  await request('/api/data', cookieB, deleteAccount);
 }

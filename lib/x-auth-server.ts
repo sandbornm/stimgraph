@@ -10,18 +10,14 @@ import {
 import { refreshXSession } from './x-api';
 import { refreshErrorAction } from './x-errors';
 import { requestOrigin } from './request-origin';
-import { openXSession, randomBase64Url, sealXSession, X_SESSION_COOKIE, type XSession } from './x-session';
+import { getRuntimeValue } from './runtime-env';
+import { sessionCookieAttributes } from './session-cookie';
+import { openXSession, randomBase64Url, sealXSession, X_SESSION_COOKIE, type OpenedXSession, type XSession } from './x-session';
 
 const SESSION_MAX_AGE_SECONDS = Math.floor(X_SESSION_TTL_MS / 1000);
 
 export function sessionCookieOptions(request: NextRequest) {
-  return {
-    httpOnly: true,
-    sameSite: 'lax' as const,
-    secure: requestOrigin(request).startsWith('https:'),
-    path: '/',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  };
+  return sessionCookieAttributes(requestOrigin(request), SESSION_MAX_AGE_SECONDS);
 }
 
 export function withRenewedSession(response: NextResponse, request: NextRequest, renewedCookie?: string) {
@@ -48,6 +44,12 @@ async function persistSession(session: XSession, sessionId?: string) {
   return id;
 }
 
+async function migrateLegacyPayload(id: string, stored: { ownerId: string; expiresAt: number }, opened: OpenedXSession) {
+  if (!opened.needsReseal || !getRuntimeValue('STIMGRAPH_TOKEN_KEY')) return;
+  const payload = await sealXSession(opened.session);
+  await saveXSessionRecord(id, stored.ownerId, payload, stored.expiresAt);
+}
+
 async function refreshStoredSession(session: XSession, sessionId?: string) {
   try {
     const refreshed = await refreshXSession(session);
@@ -70,10 +72,11 @@ export async function getStoredXSession(id: string) {
   const operation = (async () => {
     const stored = await loadXSessionRecord(id);
     if (!stored) return null;
-    const session = await openXSession(stored.payload);
-    if (!session) return null;
-    if (session.expiresAt > Date.now() + 60_000) return { session };
-    return refreshStoredSession(session, id);
+    const opened = await openXSession(stored.payload);
+    if (!opened) return null;
+    await migrateLegacyPayload(id, stored, opened);
+    if (opened.session.expiresAt > Date.now() + 60_000) return { session: opened.session };
+    return refreshStoredSession(opened.session, id);
   })();
   refreshing.set(id, operation);
   try { return await operation; } finally { refreshing.delete(id); }
@@ -87,12 +90,11 @@ export async function getActiveXSession(request: NextRequest): Promise<{
   if (!cookie) return null;
 
   if (cookie.includes('.')) {
-    const session = await openXSession(cookie);
-    if (!session) return null;
-    if (session.expiresAt > Date.now() + 60_000) {
-      return { session, renewedCookie: await persistSession(session) };
-    }
-    return refreshStoredSession(session);
+    const opened = await openXSession(cookie);
+    if (!opened) return null;
+    if (opened.session.expiresAt <= Date.now() + 60_000) return refreshStoredSession(opened.session);
+    if (!getRuntimeValue('STIMGRAPH_TOKEN_KEY')) return { session: opened.session };
+    return { session: opened.session, renewedCookie: await persistSession(opened.session) };
   }
 
   return getStoredXSession(cookie);

@@ -61,10 +61,11 @@ try {
   const cap = await Promise.all([post(cookieA, { action: 'save', card }), post(cookieA, { action: 'save', card })]);
   assert.deepEqual(cap.map((response) => response.status).sort(), [201, 409]);
   assert.match(await (await request('/')).text(), /Research bench/);
-  assert.equal((await request('/api/data', cookieA, { method: 'DELETE' })).status, 200);
+  assert.equal((await request('/api/data', cookieA, { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) })).status, 200);
   assert.deepEqual(await (await fixture(cookieA, 'counts')).json(), { cards: 0, requests: 0 });
   console.log('Research API passed: source ownership, quotation checks, persistence, versions, isolation, quotas, record cap, deletion, and page rendering. No live provider calls.');
 } finally {
-  await request('/api/data', cookieA, { method: 'DELETE' });
-  await request('/api/data', cookieB, { method: 'DELETE' });
+  const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
+  await request('/api/data', cookieA, deleteAccount);
+  await request('/api/data', cookieB, deleteAccount);
 }

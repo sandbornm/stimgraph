@@ -8,6 +8,10 @@ import { labelAfterSync } from '@/lib/jev-sync';
 
 export const dynamic = 'force-dynamic';
 
+function importFollowingOnSync(): boolean {
+  return false;
+}
+
 type SyncEvent = {
   type: 'page' | 'following' | 'done' | 'error';
   imported?: number;
@@ -115,16 +119,20 @@ export async function POST(request: NextRequest) {
             authors: [...new Set(page.bookmarks.map((bookmark) => bookmark.authorUsername))].slice(0, 4),
           });
         }
-        const follows = await importFollowing(active.session.accessToken, active.session.profile.id);
-        send({
-          type: 'following',
-          following: follows.following,
-          followingError: follows.followingError,
-          imported,
-          inserted,
-          insertedIds: allInsertedIds,
-          limit,
-        });
+        const follows = importFollowingOnSync()
+          ? await importFollowing(active.session.accessToken, active.session.profile.id)
+          : null;
+        if (follows) {
+          send({
+            type: 'following',
+            following: follows.following,
+            followingError: follows.followingError,
+            imported,
+            inserted,
+            insertedIds: allInsertedIds,
+            limit,
+          });
+        }
         send({
           type: 'done',
           imported,
@@ -132,8 +140,7 @@ export async function POST(request: NextRequest) {
           insertedIds: allInsertedIds,
           hasMore: false,
           limit,
-          following: follows.following,
-          followingError: follows.followingError,
+          ...(follows ? { following: follows.following, followingError: follows.followingError } : {}),
         });
         controller.close();
         void labelAfterSync(active.session.profile.id);
