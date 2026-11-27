@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionRecord } from '@/db/storage';
+import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionOwnerId } from '@/db/storage';
 import { accountDeletionDecision, deleteAccountRequestAllowed } from '@/lib/delete-account';
 import { revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
 import { withOwnerWork } from '@/lib/owner-work';
@@ -35,7 +35,7 @@ export async function DELETE(request: NextRequest) {
   if (!xAuthConfigured(getRuntimeValue)) {
     const cookieValue = readSessionCookie(request.cookies).value;
     const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
-      ? (await loadXSessionRecord(cookieValue))?.ownerId ?? null
+      ? await loadXSessionOwnerId(cookieValue)
       : null;
     const decision = accountDeletionDecision({
       configured: false,

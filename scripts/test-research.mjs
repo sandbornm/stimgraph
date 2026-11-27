@@ -1,26 +1,53 @@
 import assert from 'node:assert/strict';
 import { webcrypto, randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const origin = 'http://127.0.0.1:3012';
 const runId = randomUUID();
-async function fixtureCookie(owner) {
+const databasePath = process.env.STIMGRAPH_DATABASE;
+if (!databasePath || !isAbsolute(databasePath)) {
+  throw new Error('STIMGRAPH_DATABASE must be the absolute sqlite path of the isolated preview. A dotted session cookie is not a session.');
+}
+async function sealedPayload(owner) {
   const digest = await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode('stimgraph:x-session:v1:stimgraph-inert-test-secret'));
   const key = await webcrypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt']);
   const iv = webcrypto.getRandomValues(new Uint8Array(12));
   const payload = new TextEncoder().encode(JSON.stringify({ accessToken: 'inert-fixture-no-network', expiresAt: Date.now() + 3600_000,
     profile: { id: owner, name: 'Research test', username: 'research_test' } }));
   const encrypted = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
-  return `stim_x_session=${Buffer.from(iv).toString('base64url')}.${Buffer.from(encrypted).toString('base64url')}`;
+  return `${Buffer.from(iv).toString('base64url')}.${Buffer.from(encrypted).toString('base64url')}`;
+}
+function installSession(owner, payload) {
+  const id = randomUUID();
+  const now = Date.now();
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.prepare('INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, owner, payload, now + 86_400_000, now, now);
+  } finally {
+    db.close();
+  }
+  return { id, cookie: `stim_x_session=${id}` };
+}
+function removeSessions(ids) {
+  const db = new DatabaseSync(databasePath);
+  try {
+    for (const id of ids) db.prepare('DELETE FROM x_sessions WHERE id = ?').run(id);
+  } finally {
+    db.close();
+  }
 }
 const ownerA = `research-test-a-${runId}`, ownerB = `research-test-b-${runId}`;
-const cookieA = await fixtureCookie(ownerA), cookieB = await fixtureCookie(ownerB);
+const sessionA = installSession(ownerA, await sealedPayload(ownerA));
+const sessionB = installSession(ownerB, await sealedPayload(ownerB));
+const cookieA = sessionA.cookie, cookieB = sessionB.cookie;
 const request = (path, cookie, options = {}) => fetch(`${origin}${path}`, { ...options, headers: { ...(cookie ? { Cookie: cookie } : {}), ...options.headers } });
 const post = (cookie, body, headers = {}) => request('/api/research', cookie, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 const fixture = (cookie, action) => request('/api/test-research', cookie, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) });
-for (const [owner, cookie] of [[ownerA, cookieA], [ownerB, cookieB]]) {
-  assert.equal((await (await request('/api/auth/x/status', cookie)).json()).profile?.id, owner, 'Use only the isolated preview with inert credentials.');
-}
 try {
+  for (const [owner, cookie] of [[ownerA, cookieA], [ownerB, cookieB]]) {
+    assert.equal((await (await request('/api/auth/x/status', cookie)).json()).profile?.id, owner, 'Use only the isolated preview with inert credentials.');
+  }
   const seededA = await fixture(cookieA, 'seed');
   assert.equal(seededA.status, 200, 'Install scripts/fixtures/research-route.ts in the isolated preview only.');
   const { ids } = await seededA.json();
@@ -65,7 +92,11 @@ try {
   assert.deepEqual(await (await fixture(cookieA, 'counts')).json(), { cards: 0, requests: 0 });
   console.log('Research API passed: source ownership, quotation checks, persistence, versions, isolation, quotas, record cap, deletion, and page rendering. No live provider calls.');
 } finally {
-  const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
-  await request('/api/data', cookieA, deleteAccount);
-  await request('/api/data', cookieB, deleteAccount);
+  try {
+    const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
+    await request('/api/data', cookieA, deleteAccount);
+    await request('/api/data', cookieB, deleteAccount);
+  } finally {
+    removeSessions([sessionA.id, sessionB.id]);
+  }
 }

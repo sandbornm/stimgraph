@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 import { webcrypto, randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const origin = 'http://127.0.0.1:3012';
 const testSecret = 'stimgraph-inert-test-secret';
 const runId = randomUUID();
+const databasePath = process.env.STIMGRAPH_DATABASE;
+if (!databasePath || !isAbsolute(databasePath)) {
+  throw new Error('STIMGRAPH_DATABASE must be the absolute sqlite path of the isolated preview. A dotted session cookie is not a session.');
+}
 
-async function fixtureCookie(owner) {
+async function sealedPayload(owner) {
   const material = new TextEncoder().encode(`stimgraph:x-session:v1:${testSecret}`);
   const digest = await webcrypto.subtle.digest('SHA-256', material);
   const key = await webcrypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt']);
@@ -15,13 +21,36 @@ async function fixtureCookie(owner) {
     profile: { id: owner, name: 'Trajectory test', username: 'trajectory_test' },
   }));
   const encrypted = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload);
-  return `stim_x_session=${Buffer.from(iv).toString('base64url')}.${Buffer.from(encrypted).toString('base64url')}`;
+  return `${Buffer.from(iv).toString('base64url')}.${Buffer.from(encrypted).toString('base64url')}`;
+}
+
+function installSession(owner, payload) {
+  const id = randomUUID();
+  const now = Date.now();
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.prepare('INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, owner, payload, now + 86_400_000, now, now);
+  } finally {
+    db.close();
+  }
+  return { id, cookie: `stim_x_session=${id}` };
+}
+
+function removeSessions(ids) {
+  const db = new DatabaseSync(databasePath);
+  try {
+    for (const id of ids) db.prepare('DELETE FROM x_sessions WHERE id = ?').run(id);
+  } finally {
+    db.close();
+  }
 }
 
 const ownerA = `trajectory-test-a-${runId}`;
 const ownerB = `trajectory-test-b-${runId}`;
-const cookieA = await fixtureCookie(ownerA);
-const cookieB = await fixtureCookie(ownerB);
+const sessionA = installSession(ownerA, await sealedPayload(ownerA));
+const sessionB = installSession(ownerB, await sealedPayload(ownerB));
+const cookieA = sessionA.cookie;
+const cookieB = sessionB.cookie;
 const request = (path, cookie, options = {}) => fetch(`${origin}${path}`, {
   ...options, headers: { ...(cookie ? { Cookie: cookie } : {}), ...options.headers },
 });
@@ -36,13 +65,12 @@ const draft = {
   ],
 };
 
-for (const [owner, cookie] of [[ownerA, cookieA], [ownerB, cookieB]]) {
-  const response = await request('/api/auth/x/status', cookie);
-  const status = await response.json();
-  assert.equal(status.profile?.id, owner, 'Use an isolated preview with the inert test secret.');
-}
-
 try {
+  for (const [owner, cookie] of [[ownerA, cookieA], [ownerB, cookieB]]) {
+    const response = await request('/api/auth/x/status', cookie);
+    const status = await response.json();
+    assert.equal(status.profile?.id, owner, 'Use an isolated preview with the inert test secret.');
+  }
   assert.equal((await request('/api/trajectories')).status, 401);
   assert.equal((await post(undefined, draft)).status, 401);
   const response = await post(cookieA, draft);
@@ -72,7 +100,11 @@ try {
   assert.deepEqual(afterDelete.trajectories, []);
   console.log('Trajectory API passed: persistence, account isolation, validation, private caching, separate versions, deletion, and page rendering.');
 } finally {
-  const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
-  await request('/api/data', cookieA, deleteAccount);
-  await request('/api/data', cookieB, deleteAccount);
+  try {
+    const deleteAccount = { method: 'DELETE', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify({ confirm: 'delete my account' }) };
+    await request('/api/data', cookieA, deleteAccount);
+    await request('/api/data', cookieB, deleteAccount);
+  } finally {
+    removeSessions([sessionA.id, sessionB.id]);
+  }
 }

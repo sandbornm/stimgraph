@@ -32,6 +32,27 @@ export type CookieWrite = {
   secure: boolean;
 };
 
+export function renewedSessionCookieWrites(input: {
+  secure: boolean;
+  maxAge: number;
+  presentedValue?: string;
+  renewedValue?: string;
+  legacyAccepted?: boolean;
+  legacyValue?: string;
+}): CookieWrite[] {
+  if (input.presentedValue?.includes('.')) {
+    return sessionCookieWrites({ secure: input.secure, maxAge: input.maxAge, clear: true });
+  }
+  return sessionCookieWrites({
+    secure: input.secure,
+    maxAge: input.maxAge,
+    renewedValue: input.renewedValue,
+    legacyAccepted: input.legacyAccepted,
+    legacyValue: input.legacyValue,
+    clear: false,
+  });
+}
+
 export function sessionCookieWrites(input: {
   secure: boolean;
   maxAge: number;

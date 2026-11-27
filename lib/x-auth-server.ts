@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import {
   deleteXSessionRecord,
   loadXSessionRecord,
-  replaceXSessionRecord,
   resealXSessionRecord,
   saveXSessionRecord,
   X_SESSION_TTL_MS,
@@ -15,15 +14,16 @@ import { requestOrigin } from './request-origin';
 import { getRuntimeValue } from './runtime-env';
 import {
   readSessionCookie,
+  renewedSessionCookieWrites,
   sessionCookieAttributes,
   sessionCookieWrites,
   stateCookieClearWrites,
   stateCookieSet,
   type CookieWrite,
 } from './session-cookie';
-import { resolveStoredXSession, SESSION_REFRESH_SKEW_MS, type StoredXSessionRow } from './x-session-resolve';
+import { resolvePresentedXSession, resolveStoredXSession, type StoredXSessionRow } from './x-session-resolve';
 import { tokenKeyUsable } from './x-session-seal';
-import { openXSession, randomBase64Url, sealXSession, type OpenedXSession, type XSession } from './x-session';
+import { openXSession, sealXSession, type OpenedXSession, type XSession } from './x-session';
 
 const SESSION_MAX_AGE_SECONDS = Math.floor(X_SESSION_TTL_MS / 1000);
 const refreshing = new Map<string, Promise<{ session: XSession; renewedCookie?: string } | null>>();
@@ -43,13 +43,13 @@ function applyCookieWrites(response: NextResponse, request: NextRequest, writes:
 export function withRenewedSession(response: NextResponse, request: NextRequest, renewedCookie?: string) {
   const options = sessionCookieOptions(request);
   const read = readSessionCookie(request.cookies);
-  return applyCookieWrites(response, request, sessionCookieWrites({
+  return applyCookieWrites(response, request, renewedSessionCookieWrites({
     secure: options.secure,
     maxAge: options.maxAge,
+    presentedValue: read.value,
     renewedValue: renewedCookie,
     legacyAccepted: read.legacy,
     legacyValue: read.value,
-    clear: false,
   }));
 }
 
@@ -74,16 +74,11 @@ export function clearOauthStateCookie(response: NextResponse, request: NextReque
   return applyCookieWrites(response, request, stateCookieClearWrites(options.secure));
 }
 
-async function persistSession(session: XSession, sessionId?: string) {
-  const id = sessionId ?? randomBase64Url();
+async function persistSession(session: XSession, sessionId: string) {
   const payload = await sealXSession(session);
   const expiresAt = Date.now() + X_SESSION_TTL_MS;
-  if (sessionId) {
-    await saveXSessionRecord(id, session.profile.id, payload, expiresAt);
-  } else {
-    await replaceXSessionRecord(id, session.profile.id, payload, expiresAt);
-  }
-  return id;
+  await saveXSessionRecord(sessionId, session.profile.id, payload, expiresAt);
+  return sessionId;
 }
 
 async function migrateLegacyPayload(id: string, stored: StoredXSessionRow, opened: OpenedXSession) {
@@ -92,7 +87,7 @@ async function migrateLegacyPayload(id: string, stored: StoredXSessionRow, opene
   await resealXSessionRecord(id, stored.ownerId, stored.payload, payload);
 }
 
-async function refreshStoredSession(session: XSession, sessionId?: string) {
+async function refreshStoredSession(session: XSession, sessionId: string) {
   if (!tokenKeyUsable(getRuntimeValue)) return null;
   try {
     const refreshed = await refreshXSession(session);
@@ -100,7 +95,7 @@ async function refreshStoredSession(session: XSession, sessionId?: string) {
     return { session: refreshed, renewedCookie: id };
   } catch (error) {
     if (refreshErrorAction(error) === 'delete') {
-      if (sessionId) await deleteXSessionRecord(sessionId);
+      await deleteXSessionRecord(sessionId);
       return null;
     }
     throw error;
@@ -132,22 +127,11 @@ export async function getStoredXSessionLocked(id: string) {
   return resolveStoredXSession({ id, ...storedSessionDeps(true) });
 }
 
-export async function getActiveXSession(request: NextRequest): Promise<{
-  session: XSession;
-  renewedCookie?: string;
-} | null> {
-  if (!tokenKeyUsable(getRuntimeValue)) return null;
+export async function getActiveXSession(request: NextRequest): Promise<{ session: XSession; renewedCookie?: string } | null> {
   const cookie = readSessionCookie(request.cookies).value;
-  if (!cookie) return null;
-
-  if (cookie.includes('.')) {
-    const opened = await openXSession(cookie);
-    if (!opened) return null;
-    if (opened.session.expiresAt <= Date.now() + SESSION_REFRESH_SKEW_MS) {
-      return withOwnerWork(opened.session.profile.id, () => refreshStoredSession(opened.session));
-    }
-    return { session: opened.session, renewedCookie: await persistSession(opened.session) };
-  }
-
-  return getStoredXSession(cookie);
+  return resolvePresentedXSession({
+    cookie,
+    keyUsable: tokenKeyUsable(getRuntimeValue),
+    loadStored: (id) => getStoredXSession(id),
+  });
 }

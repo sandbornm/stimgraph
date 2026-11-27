@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import { readSessionCookie } from '@/lib/session-cookie';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { xAuthConfigured } from '@/lib/x-auth-config';
@@ -10,13 +11,14 @@ export async function GET(request: NextRequest) {
   const configured = xAuthConfigured(getRuntimeValue);
   const backgroundPolling = getRuntimeValue('STIMGRAPH_BACKGROUND_POLL') === 'true';
   const active = await getActiveXSession(request);
-  if (!active) return NextResponse.json({ connected: false, configured, backgroundPolling });
-
-  return withRenewedSession(NextResponse.json({
+  const response = NextResponse.json(active ? {
     connected: true,
     configured,
     backgroundPolling,
     profile: active.session.profile,
     expiresAt: active.session.expiresAt,
-  }), request, active.renewedCookie);
+  } : { connected: false, configured, backgroundPolling });
+  const presented = readSessionCookie(request.cookies).value;
+  if (active || presented?.includes('.')) return withRenewedSession(response, request, active?.renewedCookie);
+  return response;
 }

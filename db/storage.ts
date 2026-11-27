@@ -247,6 +247,14 @@ export async function resealXSessionRecord(id: string, ownerId: string, expected
     WHERE id = ? AND owner_id = ? AND payload = ?`).bind(payload, Date.now(), id, ownerId, expectedPayload).run();
 }
 
+export async function loadXSessionOwnerId(id: string): Promise<string | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT owner_id FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ owner_id: string }>();
+  return row?.owner_id ?? null;
+}
+
 export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
   await ensureSchema();
   const row = await getD1().prepare(

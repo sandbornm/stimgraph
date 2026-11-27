@@ -2,17 +2,24 @@ const X_REVOKE_URL = 'https://api.x.com/2/oauth2/revoke';
 
 export type RevocationResult = 'revoked' | 'failed';
 
-export function classifyRevocation(status: number, bodyText: string): RevocationResult {
-  if (status === 400 || status === 401) return 'revoked';
-  if (status < 200 || status >= 300) return 'failed';
+function revocationBody(bodyText: string): Record<string, unknown> | null {
   const trimmed = bodyText.trim();
-  if (!trimmed) return 'failed';
+  if (!trimmed) return null;
   try {
-    JSON.parse(trimmed);
-    return 'revoked';
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
-    return 'failed';
+    return null;
   }
+}
+
+export function classifyRevocation(status: number, bodyText: string): RevocationResult {
+  const body = revocationBody(bodyText);
+  if (status === 400) return body?.error === 'invalid_token' ? 'revoked' : 'failed';
+  if (status < 200 || status >= 300 || !body) return 'failed';
+  if (!Object.hasOwn(body, 'revoked') || body.revoked === true) return 'revoked';
+  return 'failed';
 }
 
 export async function requestTokenRevocation(input: {

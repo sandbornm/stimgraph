@@ -178,6 +178,30 @@ test('a fresh token does not take the owner lock', async () => {
   assert.equal(resolved?.session.accessToken, 'access');
 });
 
+test('an empty stored payload list still revokes the opened session before delete', async () => {
+  let revoked = 0;
+  let deleted = false;
+  const outcome = await revokeAndDeleteOwner({
+    ownerId: 'owner-empty-payload',
+    current: { accessToken: 'access', refreshToken: 'refresh' },
+    force: false,
+    withLock: withOwnerWork,
+    loadPayloads: async () => ['sealed-unreadable'],
+    openPayload: async () => null,
+    revoke: async (session) => {
+      assert.equal(session.refreshToken, 'refresh');
+      revoked += 1;
+      return true;
+    },
+    deleteData: async () => {
+      deleted = true;
+    },
+  });
+  assert.equal(revoked, 1);
+  assert.equal(deleted, true);
+  assert.deepEqual(outcome, { deleted: true, revoked: true });
+});
+
 test('owner deletion refuses without force and proceeds with force', async () => {
   async function run(force: boolean) {
     let deleted = false;

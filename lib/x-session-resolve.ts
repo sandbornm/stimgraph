@@ -11,6 +11,18 @@ export type ResolvedXSession<TSession> = {
   renewedCookie?: string;
 };
 
+export async function resolvePresentedXSession<TSession>(input: {
+  cookie: string | undefined;
+  keyUsable: boolean;
+  loadStored: (id: string) => Promise<TSession | null>;
+  openInline?: (cookie: string) => Promise<TSession | null>;
+  persistInline?: (session: TSession) => Promise<string>;
+  refreshInline?: (session: TSession) => Promise<TSession | null>;
+}): Promise<TSession | null> {
+  if (!input.cookie || input.cookie.includes('.') || !input.keyUsable) return null;
+  return input.loadStored(input.cookie);
+}
+
 export async function resolveStoredXSession<TSession extends { expiresAt: number }>(input: {
   id: string;
   lockHeld: boolean;

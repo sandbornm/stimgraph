@@ -95,10 +95,21 @@ test('an unconfigured server deletes from the session row and skips revoke', () 
   const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
   const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/page.tsx'), 'utf8');
   assert.match(route, /readSessionCookie/);
-  assert.match(route, /loadXSessionRecord/);
+  assert.match(route, /loadXSessionOwnerId/);
+  assert.equal(route.includes('loadXSessionRecord'), false);
   assert.match(route, /revokeSkipped: 'not_configured'/);
   assert.equal(route.includes('The X connection is not configured on the server.'), false);
   assert.match(page, /payload\?\.revoked === false/);
   assert.match(page, /Revoke Stimgraph in your X settings \(Security and account access > Apps and sessions\)\./);
   assert.match(page, /connection\.configured === false/);
+});
+
+test('an unconfigured server deletes when the session row is expired and the owner id is still known', () => {
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    allRevoked: false,
+    force: false,
+    cookieValue: 'opaque-expired-session',
+    ownerIdFromRow: 'owner-expired',
+  }), { delete: true, revoked: false, revokeSkipped: 'not_configured', ownerId: 'owner-expired' });
 });

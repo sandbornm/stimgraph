@@ -19,6 +19,18 @@ test('saving a refreshed session only updates an existing row and cannot recreat
   assert.doesNotMatch(body, /replaceXSessionRecord/);
 });
 
+test('delete-owner lookup reads owner_id without an expiry filter or a delete', () => {
+  const body = functionBody('loadXSessionOwnerId');
+  assert.match(body, /SELECT owner_id FROM x_sessions WHERE id = \?/);
+  assert.doesNotMatch(body, /expires_at/);
+  assert.doesNotMatch(body, /DELETE/);
+  const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
+  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('const active = await getActiveXSession'));
+  assert.match(unconfigured, /loadXSessionOwnerId\(cookieValue\)/);
+  assert.doesNotMatch(unconfigured, /loadXSessionRecord/);
+  assert.doesNotMatch(unconfigured, /expires_at/);
+});
+
 test('re-sealing a legacy session is compare-and-swap so it cannot overwrite a token rotated meanwhile', () => {
   const body = functionBody('resealXSessionRecord');
   assert.match(body, /UPDATE x_sessions SET payload = \?, updated_at = \?\s+WHERE id = \? AND owner_id = \? AND payload = \?/);
