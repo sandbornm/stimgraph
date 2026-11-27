@@ -99,6 +99,13 @@ try {
   const cookie = { Cookie: 'stim_x_session=fixture-session', Origin: origin };
   const deleteAccount = { method: 'DELETE', body: JSON.stringify({ confirm: 'delete my account' }) };
   assert.equal((await request('/api/data', { ...cookie, Origin: 'https://untrusted.invalid', 'Content-Type': 'application/json' }, deleteAccount)).status, 403);
+  writeFileSync(scenario, JSON.stringify({ count: 125, revokeFailure: 503 }));
+  const refused = await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount);
+  assert.equal(refused.status, 502);
+  assert.equal((await refused.json()).retryable, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM x_sessions').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
+  writeFileSync(scenario, JSON.stringify({ count: 125 }));
   assert.equal((await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount)).status, 200);
   for (const table of ['bookmarks', 'bookmark_observations', 'bookmark_sync_state', 'x_sessions', 'accounts']) {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);

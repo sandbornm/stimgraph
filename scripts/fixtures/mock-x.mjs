@@ -7,6 +7,7 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
   if (url.hostname === 'api.x.com') {
     const scenario = JSON.parse(readFileSync(process.env.STIMGRAPH_TEST_SCENARIO, 'utf8'));
+    if (url.pathname === '/2/oauth2/revoke') return scenario.revokeFailure ? Response.json({}, { status: scenario.revokeFailure }) : Response.json({ revoked: true });
     if (url.pathname === '/2/oauth2/token') return Response.json({ access_token: 'inert-refreshed', refresh_token: 'inert-rotated', expires_in: 7200 });
     if (scenario.failure) return Response.json({}, { status: scenario.failure, headers: { 'Retry-After': '900' } });
     const size = Number(url.searchParams.get('max_results'));

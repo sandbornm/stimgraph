@@ -241,6 +241,12 @@ export async function saveXSessionRecord(id: string, ownerId: string, payload: s
     WHERE id = ? AND owner_id = ?`).bind(payload, expiresAt, now, id, ownerId).run();
 }
 
+export async function resealXSessionRecord(id: string, ownerId: string, expectedPayload: string, payload: string) {
+  await ensureSchema();
+  await getD1().prepare(`UPDATE x_sessions SET payload = ?, updated_at = ?
+    WHERE id = ? AND owner_id = ? AND payload = ?`).bind(payload, Date.now(), id, ownerId, expectedPayload).run();
+}
+
 export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
   await ensureSchema();
   const row = await getD1().prepare(
@@ -805,12 +811,14 @@ export async function loadFeeds(ownerId: string): Promise<FeedProbe[]> {
   });
 }
 
+export async function deleteOwnerDataUnlocked(ownerId: string) {
+  await ensureSchema();
+  const d1 = getD1();
+  await d1.batch(ownerDeleteStatements().map((sql) => d1.prepare(sql).bind(ownerId)));
+}
+
 export async function deleteOwnerData(ownerId: string) {
-  return withOwnerWork(ownerId, async () => {
-    await ensureSchema();
-    const d1 = getD1();
-    await d1.batch(ownerDeleteStatements().map((sql) => d1.prepare(sql).bind(ownerId)));
-  });
+  return withOwnerWork(ownerId, () => deleteOwnerDataUnlocked(ownerId));
 }
 
 export async function saveShare(id: string, ownerId: string, capsule: GraphCapsule) {

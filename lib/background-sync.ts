@@ -1,6 +1,7 @@
 import { getD1 } from '@/db/index';
 import { ensureSchema, storeBookmarks } from '@/db/storage';
-import { getStoredXSession } from './x-auth-server';
+import { getStoredXSessionLocked } from './x-auth-server';
+import { tokenKeyUsable } from './x-session-seal';
 import { iterateXBookmarks } from './x-bookmarks';
 import { getRuntimeValue } from './runtime-env';
 import { XRequestError } from './x-errors';
@@ -10,6 +11,7 @@ import { labelAfterSync } from './jev-sync';
 
 export async function pollConnectedAccounts() {
   if (getRuntimeValue('STIMGRAPH_BACKGROUND_POLL') !== 'true') return;
+  if (!tokenKeyUsable(getRuntimeValue)) return;
   await ensureSchema();
   const d1 = getD1();
   const now = Date.now();
@@ -31,7 +33,7 @@ export async function pollConnectedAccounts() {
       let fetched = 0;
       let continuation: string | null = claimed.continuation;
       try {
-        const active = await getStoredXSession(stored.id);
+        const active = await getStoredXSessionLocked(stored.id);
         if (!active) {
           await d1.prepare(`UPDATE bookmark_sync_state SET lease_until = 0, status = 'reconnect_required',
             next_poll_at = ? WHERE owner_id = ?`).bind(now + POLL_INTERVAL_MS, stored.owner_id).run();

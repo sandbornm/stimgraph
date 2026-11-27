@@ -18,3 +18,14 @@ test('saving a refreshed session only updates an existing row and cannot recreat
   assert.doesNotMatch(body, /INSERT INTO x_sessions/);
   assert.doesNotMatch(body, /replaceXSessionRecord/);
 });
+
+test('re-sealing a legacy session is compare-and-swap so it cannot overwrite a token rotated meanwhile', () => {
+  const body = functionBody('resealXSessionRecord');
+  assert.match(body, /UPDATE x_sessions SET payload = \?, updated_at = \?\s+WHERE id = \? AND owner_id = \? AND payload = \?/);
+  assert.doesNotMatch(body, /INSERT INTO x_sessions/);
+  const server = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'x-auth-server.ts'), 'utf8');
+  const migrate = server.match(/async function migrateLegacyPayload\([\s\S]*?\n\}/);
+  assert.ok(migrate);
+  assert.match(migrate[0], /resealXSessionRecord\(id, stored\.ownerId, stored\.payload, payload\)/);
+  assert.doesNotMatch(migrate[0], /saveXSessionRecord/);
+});

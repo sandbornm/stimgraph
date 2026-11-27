@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { DELETE_ACCOUNT_CONFIRMATION, deleteAccountRequestAllowed } from './delete-account.ts';
+import {
+  accountDeletionDecision,
+  DELETE_ACCOUNT_CONFIRMATION,
+  deleteAccountRequestAllowed,
+  REVOKE_UNCONFIRMED_ERROR,
+} from './delete-account.ts';
 
 const origin = 'https://app.example';
 
@@ -31,4 +36,20 @@ test('delete account rejects a missing or foreign origin and a bad confirmation'
   const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/page.tsx'), 'utf8');
   assert.match(page, /DELETE_ACCOUNT_CONFIRMATION/);
   assert.match(page, />Delete account</);
+  assert.match(page, /force: true/);
+  assert.match(page, /X did not confirm revoking access\. Delete your Stimgraph data anyway\?/);
+});
+
+test('deletion is refused when revocation failed unless force is set', () => {
+  assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: false }), { delete: true, revoked: true });
+  assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: true }), { delete: true, revoked: true });
+  assert.deepEqual(accountDeletionDecision({ allRevoked: false, force: false }), {
+    delete: false,
+    status: 502,
+    error: REVOKE_UNCONFIRMED_ERROR,
+    revoked: false,
+    retryable: true,
+  });
+  assert.equal(REVOKE_UNCONFIRMED_ERROR, 'X did not confirm that access was revoked. Nothing was deleted; try again.');
+  assert.deepEqual(accountDeletionDecision({ allRevoked: false, force: true }), { delete: true, revoked: false });
 });

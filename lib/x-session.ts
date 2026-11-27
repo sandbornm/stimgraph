@@ -6,8 +6,7 @@ import {
   type OpenedXSession,
 } from './x-session-seal';
 
-export const X_SESSION_COOKIE = 'stim_x_session';
-export const X_STATE_COOKIE = 'stim_x_oauth_state';
+export { X_SESSION_COOKIE, X_STATE_COOKIE } from './session-cookie';
 
 export type { OpenedXSession };
 

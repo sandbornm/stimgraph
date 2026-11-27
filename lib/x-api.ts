@@ -1,6 +1,7 @@
 import { requireRuntimeValue } from './runtime-env';
 import type { XProfile, XSession } from './x-session';
 import { XRequestError, retryTime } from './x-errors';
+import { requestTokenRevocation } from './x-revoke';
 
 const X_TOKEN_URL = 'https://api.x.com/2/oauth2/token';
 
@@ -77,34 +78,26 @@ export async function refreshXSession(session: XSession): Promise<XSession> {
   };
 }
 
-const X_REVOKE_URL = 'https://api.x.com/2/oauth2/revoke';
-
-async function postRevocation(token: string, tokenTypeHint: 'refresh_token' | 'access_token') {
-  const response = await fetch(X_REVOKE_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: basicAuthorization(),
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({ token, token_type_hint: tokenTypeHint }),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(5_000),
-  });
-  await response.arrayBuffer().catch(() => undefined);
-}
-
-export async function revokeXSession(session: { accessToken: string; refreshToken?: string }) {
-  if (session.refreshToken) {
-    try {
-      await postRevocation(session.refreshToken, 'refresh_token');
-    } catch {
-      void 0;
-    }
-  }
+export async function revokeXSession(session: { accessToken: string; refreshToken?: string }): Promise<boolean> {
   try {
-    await postRevocation(session.accessToken, 'access_token');
+    const authorization = basicAuthorization();
+    let ok = true;
+    if (session.refreshToken) {
+      const refreshOk = await requestTokenRevocation({
+        token: session.refreshToken,
+        tokenTypeHint: 'refresh_token',
+        authorization,
+      });
+      ok = refreshOk && ok;
+    }
+    const accessOk = await requestTokenRevocation({
+      token: session.accessToken,
+      tokenTypeHint: 'access_token',
+      authorization,
+    });
+    return accessOk && ok;
   } catch {
-    void 0;
+    return false;
   }
 }
 

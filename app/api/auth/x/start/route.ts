@@ -4,8 +4,8 @@ import { saveOauthPending } from '@/db/storage';
 import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
 import { xAuthConfigured } from '@/lib/x-auth-config';
 import { X_OAUTH_SCOPE } from '@/lib/x-oauth';
-import { createPkceChallenge, randomBase64Url, X_STATE_COOKIE } from '@/lib/x-session';
-import { sessionCookieOptions } from '@/lib/x-auth-server';
+import { assignStateCookie } from '@/lib/x-auth-server';
+import { createPkceChallenge, randomBase64Url } from '@/lib/x-session';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     }).toString();
 
     const response = NextResponse.redirect(authorizeUrl);
-    response.cookies.set(X_STATE_COOKIE, state, { ...sessionCookieOptions(request), maxAge: 600 });
+    assignStateCookie(response, request, state);
     response.headers.set('Cache-Control', 'no-store');
     return response;
   } catch {

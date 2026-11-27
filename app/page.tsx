@@ -2687,11 +2687,24 @@ export default function Home() {
   const deleteAccount = async () => {
     const confirmed = window.confirm('Delete this Stimgraph account, including the local map and the X connection? This cannot be undone.');
     if (!confirmed) return;
-    const response = await fetch('/api/data', {
+    const sendDelete = (force: boolean) => fetch('/api/data', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: DELETE_ACCOUNT_CONFIRMATION }),
+      body: JSON.stringify(force ? { confirm: DELETE_ACCOUNT_CONFIRMATION, force: true } : { confirm: DELETE_ACCOUNT_CONFIRMATION }),
     });
+    let response = await sendDelete(false);
+    if (response.status === 502) {
+      const failure = await response.json().catch(() => null) as { retryable?: boolean; error?: string } | null;
+      if (failure?.retryable) {
+        const forced = window.confirm('X did not confirm revoking access. Delete your Stimgraph data anyway? You can revoke Stimgraph in your X settings (Security and account access > Apps and sessions).');
+        if (!forced) {
+          setSyncState('error');
+          setSyncMessage(typeof failure.error === 'string' ? failure.error : 'The account could not be deleted.');
+          return;
+        }
+        response = await sendDelete(true);
+      }
+    }
     if (!response.ok) {
       setSyncState('error');
       setSyncMessage('The account could not be deleted.');

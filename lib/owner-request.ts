@@ -1,14 +1,14 @@
 import type { NextRequest } from 'next/server';
 import { getD1 } from '@/db/index';
 import { ensureSchema, loadXSessionRecord } from '@/db/storage';
-import { X_SESSION_COOKIE } from './x-session';
+import { readSessionCookie } from './session-cookie';
 import { getRuntimeValue } from './runtime-env';
 import { trustedTailnetLogin } from './background-policy';
 import { uniqueOwnerId } from './unique-owner-id';
 
 export async function resolveOwnerId(request: NextRequest): Promise<string | undefined> {
   await ensureSchema();
-  const cookie = request.cookies.get(X_SESSION_COOKIE)?.value;
+  const cookie = readSessionCookie(request.cookies).value;
   if (cookie && !cookie.includes('.')) {
     const ownerId = (await loadXSessionRecord(cookie))?.ownerId;
     if (ownerId) return ownerId;

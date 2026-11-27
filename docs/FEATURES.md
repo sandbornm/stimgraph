@@ -30,7 +30,7 @@ Research cards save privately as separate versions (up to 100 per account). Demo
 
 Email-based app identity is a separate launch step. The current prototype still uses the connected X account as the data owner. See [LAUNCH.md](LAUNCH.md) for the proposed email-login and X-connection model; it has not been enabled or deployed.
 
-Connect X once. The handshake and tokens live in the local database; the browser only keeps a small httpOnly cookie (`stim_x_session`) for 180 days. You should not need to reconnect on every refresh or dev-server restart. Disconnect, deleting local data, or revoking the app in X will clear it.
+Connect X once. The handshake and tokens live in the local database; the browser only keeps a small httpOnly cookie (`__Host-stim_x_session` on HTTPS, `stim_x_session` on local HTTP) for 180 days. You should not need to reconnect on every refresh or dev-server restart. Disconnect, deleting local data, or revoking the app in X will clear it.
 
 The map is a graph: you at the pole, people and topics around you, saved posts near authors. Solid lines are bookmark evidence. Short dashes are topic/author overlap. Longer dotted hairlines are accounts you follow. Search with `/` or ⌘K; `@` people, `#` topics, `~` following, `:` commands.
 

@@ -29,6 +29,17 @@ function fromBase64Url(value: string): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+export function tokenKeyUsable(read: RuntimeRead): boolean {
+  const value = read('STIMGRAPH_TOKEN_KEY');
+  if (!value) return false;
+  try {
+    tokenKeyBytes(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function tokenKeyBytes(value: string): ArrayBuffer {
   try {
     const trimmed = value.trim();

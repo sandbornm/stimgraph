@@ -112,7 +112,7 @@ If `TYPESAFE_API_KEY` is set (env in development; Keychain item `net.stimgraph.T
 ## Where data lives
 
 - Bookmarks, topics, OAuth sessions (tokens encrypted with `STIMGRAPH_TOKEN_KEY`), trajectories, and research cards: the local database (see table above). Protect it and its backups; enable FileVault on the always-on Mac.
-- The browser holds only an httpOnly session cookie (`stim_x_session`, 180 days) and UI preferences.
+- The browser holds only an httpOnly session cookie (`__Host-stim_x_session` on HTTPS, `stim_x_session` on local HTTP, 180 days) and UI preferences.
 - Nothing is sent to xAI or Crossref unless you press the corresponding action; see the permission boundary below.
 
 ## Security model

@@ -1,34 +1,25 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteOwnerData, loadOwnerXSessionPayloads } from '@/db/storage';
+import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads } from '@/db/storage';
 import { deleteAccountRequestAllowed } from '@/lib/delete-account';
+import { revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
+import { withOwnerWork } from '@/lib/owner-work';
 import { requestOrigin } from '@/lib/request-origin';
+import { getRuntimeValue } from '@/lib/runtime-env';
 import { revokeXSession } from '@/lib/x-api';
+import { xAuthConfigured } from '@/lib/x-auth-config';
 import { clearSessionCookie, getActiveXSession } from '@/lib/x-auth-server';
-import { openXSession, type XSession } from '@/lib/x-session';
+import { openXSession } from '@/lib/x-session';
 
 const noStore = { 'Cache-Control': 'private, no-store' };
 
-async function revokeOwnerSessions(ownerId: string, current: XSession) {
-  const payloads = await loadOwnerXSessionPayloads(ownerId);
-  const sessions = [current];
-  for (const payload of payloads) {
-    const opened = await openXSession(payload);
-    if (opened) sessions.push(opened.session);
-  }
-  const seen = new Set<string>();
-  for (const session of sessions) {
-    const mark = `${session.refreshToken ?? ''}\n${session.accessToken}`;
-    if (seen.has(mark)) continue;
-    seen.add(mark);
-    await revokeXSession(session);
-  }
-}
-
 export async function DELETE(request: NextRequest) {
   let confirm: unknown;
+  let force = false;
   try {
-    confirm = ((await request.json()) as { confirm?: unknown }).confirm;
+    const body = await request.json() as { confirm?: unknown; force?: unknown };
+    confirm = body.confirm;
+    force = body.force === true;
   } catch {
     confirm = undefined;
   }
@@ -40,9 +31,33 @@ export async function DELETE(request: NextRequest) {
   })) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: noStore });
   }
+  if (!xAuthConfigured(getRuntimeValue)) {
+    return NextResponse.json(
+      { error: 'The X connection is not configured on the server.' },
+      { status: 503, headers: noStore },
+    );
+  }
   const active = await getActiveXSession(request);
   if (!active) return NextResponse.json({ error: 'Connect X first.' }, { status: 401, headers: noStore });
-  await revokeOwnerSessions(active.session.profile.id, active.session);
-  await deleteOwnerData(active.session.profile.id);
-  return clearSessionCookie(NextResponse.json({ deleted: true }, { headers: noStore }), request);
+  const outcome = await revokeAndDeleteOwner({
+    ownerId: active.session.profile.id,
+    current: active.session,
+    force,
+    withLock: withOwnerWork,
+    loadPayloads: loadOwnerXSessionPayloads,
+    openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
+    revoke: revokeXSession,
+    deleteData: deleteOwnerDataUnlocked,
+  });
+  if (!outcome.deleted) {
+    return NextResponse.json({
+      error: outcome.error,
+      revoked: false,
+      retryable: true,
+    }, { status: 502, headers: noStore });
+  }
+  return clearSessionCookie(NextResponse.json({
+    deleted: true,
+    revoked: outcome.revoked,
+  }, { headers: noStore }), request);
 }

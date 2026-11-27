@@ -20,7 +20,7 @@ The scheduler wakes every minute to check whether work is due and polls X approx
 
 Connecting X enables background import in this deployment. Disconnect stops future polls; an already running request may finish. Deleting the account removes observations and sync state along with the existing graph, waiting for an active background import so it cannot recreate deleted bookmarks, and asks X to revoke the connection. Grok enrichment and scouting remain separate explicit actions. Stored follow edges still render. Sync does not call the following import. Polling incurs X API reads even without an open browser.
 
-The connected browser checks local activity every 30 seconds and refreshes the graph when observations change, without starting a second X poller. Use the HTTPS URL so OAuth cookies and callbacks share an origin.
+The connected browser checks local activity every 30 seconds and refreshes the graph when observations change, without starting a second X poller. Use the HTTPS URL so OAuth cookies and callbacks share an origin. On HTTPS, session and OAuth state cookies use the `__Host-` prefix (`__Host-stim_x_session`, `__Host-stim_x_oauth_state`) with Secure, Path=/, and no Domain. A browser that still has `stim_x_session` is accepted once and reissued under `__Host-stim_x_session`; plain HTTP on localhost keeps the unprefixed names.
 
 ## Agent activity feed
 
