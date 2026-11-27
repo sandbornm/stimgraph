@@ -1,14 +1,14 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionOwnerId } from '@/db/storage';
-import { accountDeletionDecision, deleteAccountRequestAllowed } from '@/lib/delete-account';
-import { revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
+import { deleteAccountRequestAllowed } from '@/lib/delete-account';
+import { deleteUnconfiguredAccount, revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
 import { withOwnerWork } from '@/lib/owner-work';
 import { requestOrigin } from '@/lib/request-origin';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { readSessionCookie } from '@/lib/session-cookie';
 import { revokeXSession } from '@/lib/x-api';
-import { xAuthConfigured } from '@/lib/x-auth-config';
+import { xAuthConfigured, xClientCredentialsConfigured } from '@/lib/x-auth-config';
 import { clearSessionCookie, getActiveXSession } from '@/lib/x-auth-server';
 import { openXSession } from '@/lib/x-session';
 
@@ -37,24 +37,37 @@ export async function DELETE(request: NextRequest) {
     const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
       ? await loadXSessionOwnerId(cookieValue)
       : null;
-    const decision = accountDeletionDecision({
-      configured: false,
-      allRevoked: false,
-      force: false,
+    const outcome = await deleteUnconfiguredAccount({
+      clientCredentials: xClientCredentialsConfigured(getRuntimeValue),
       cookieValue,
       ownerIdFromRow,
+      force,
+      withLock: withOwnerWork,
+      loadPayloads: loadOwnerXSessionPayloads,
+      openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
+      revoke: revokeXSession,
+      deleteData: deleteOwnerDataUnlocked,
     });
-    if (!decision.delete || !('ownerId' in decision)) {
-      return NextResponse.json(
-        { error: decision.delete ? 'Connect X first.' : decision.error },
-        { status: decision.delete ? 401 : decision.status, headers: noStore },
-      );
+    if (!outcome.deleted) {
+      if (outcome.status === 502) {
+        return NextResponse.json({
+          error: outcome.error,
+          revoked: false,
+          retryable: true,
+        }, { status: 502, headers: noStore });
+      }
+      return NextResponse.json({ error: outcome.error }, { status: outcome.status, headers: noStore });
     }
-    await withOwnerWork(decision.ownerId, () => deleteOwnerDataUnlocked(decision.ownerId));
+    if (outcome.revokeSkipped) {
+      return clearSessionCookie(NextResponse.json({
+        deleted: true,
+        revoked: false,
+        revokeSkipped: 'not_configured',
+      }, { headers: noStore }), request);
+    }
     return clearSessionCookie(NextResponse.json({
       deleted: true,
-      revoked: false,
-      revokeSkipped: 'not_configured',
+      revoked: outcome.revoked,
     }, { headers: noStore }), request);
   }
   const active = await getActiveXSession(request);

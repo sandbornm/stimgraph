@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { getD1 } from '@/db/index';
 import { applyJevLabels, loadJevTopics, prepareJevLabels, saveJevTopics } from '@/db/jev';
+import { ownerHasSession } from '@/db/storage';
+import { labelRouteBookmarks } from '@/lib/jev-label';
 import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { resolveOwnerId } from '@/lib/owner-request';
@@ -39,8 +41,11 @@ export async function POST(request: NextRequest) {
   if (!apiKey) return NextResponse.json({ error: 'Jev labeling is off: TYPESAFE_API_KEY is not configured.' }, { status: 409, headers });
   const body = await request.json().catch(() => ({})) as { limit?: number };
   const limit = Number.isSafeInteger(body.limit) && body.limit! > 0 ? Math.min(body.limit!, 1000) : 1000;
-  const prepared = await prepareJevLabels(ownerId, apiKey, { limit });
-  const saved = await withLiveOwner(ownerId, () => applyJevLabels(ownerId, prepared));
+  const saved = await labelRouteBookmarks(ownerId, {
+    hasSession: ownerHasSession,
+    prepare: () => prepareJevLabels(ownerId, apiKey, { limit }),
+    write: (prepared) => withLiveOwner(ownerId, () => applyJevLabels(ownerId, prepared)),
+  });
   if (!saved.live) return NextResponse.json({ error: saved.error }, { status: 401, headers });
   return NextResponse.json(saved.value, { headers });
 }

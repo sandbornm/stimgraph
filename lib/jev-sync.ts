@@ -1,4 +1,6 @@
 import { applyJevLabels, prepareJevLabels, type JevRunResult } from '@/db/jev';
+import { ownerHasSession } from '@/db/storage';
+import { labelRouteBookmarks } from './jev-label';
 import { withLiveOwner } from './live-owner-bind';
 import { getRuntimeValue } from './runtime-env';
 
@@ -15,8 +17,11 @@ export async function labelAfterSync(ownerId: string, limit = 200) {
   const apiKey = getRuntimeValue('TYPESAFE_API_KEY');
   if (!apiKey) return null;
   try {
-    const prepared = await prepareJevLabels(ownerId, apiKey, { limit });
-    const outcome = await withLiveOwner(ownerId, () => applyJevLabels(ownerId, prepared));
+    const outcome = await labelRouteBookmarks(ownerId, {
+      hasSession: ownerHasSession,
+      prepare: () => prepareJevLabels(ownerId, apiKey, { limit }),
+      write: (prepared) => withLiveOwner(ownerId, () => applyJevLabels(ownerId, prepared)),
+    });
     if (!outcome.live) return null;
     return reportJev(outcome.value);
   } catch (error) {

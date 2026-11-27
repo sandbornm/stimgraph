@@ -8,3 +8,7 @@ export function xAuthConfigured(read: (name: string) => string | undefined) {
     return Boolean(read(name));
   });
 }
+
+export function xClientCredentialsConfigured(read: (name: string) => string | undefined) {
+  return Boolean(read('X_CLIENT_ID')) && Boolean(read('X_CLIENT_SECRET'));
+}

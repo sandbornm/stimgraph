@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { xAuthConfigured } from './x-auth-config.ts';
+import { xAuthConfigured, xClientCredentialsConfigured } from './x-auth-config.ts';
 import { resolveStoredXSession } from './x-session-resolve.ts';
 import { tokenKeyUsable } from './x-session-seal.ts';
 
@@ -28,6 +28,22 @@ test('x auth is not configured when the token key is missing or invalid', () => 
   assert.equal(xAuthConfigured(read(configured)), true);
   assert.equal(xAuthConfigured(read({ ...configured, STIMGRAPH_TOKEN_KEY: undefined })), false);
   assert.equal(xAuthConfigured(read({ ...configured, STIMGRAPH_TOKEN_KEY: 'abcd' })), false);
+});
+
+test('client credentials stay usable when the token key or redirect uri is missing', () => {
+  const configured = {
+    X_CLIENT_ID: 'stimgraph-inert-test',
+    X_CLIENT_SECRET: 'stimgraph-inert-test-secret',
+    X_REDIRECT_URI: 'http://127.0.0.1:3012/api/auth/x/callback',
+    STIMGRAPH_TOKEN_KEY: validKey,
+  };
+  assert.equal(xClientCredentialsConfigured(read(configured)), true);
+  assert.equal(xClientCredentialsConfigured(read({ ...configured, STIMGRAPH_TOKEN_KEY: undefined })), true);
+  assert.equal(xClientCredentialsConfigured(read({ ...configured, STIMGRAPH_TOKEN_KEY: 'abcd' })), true);
+  assert.equal(xClientCredentialsConfigured(read({ ...configured, X_REDIRECT_URI: undefined })), true);
+  assert.equal(xClientCredentialsConfigured(read({ ...configured, X_CLIENT_ID: undefined })), false);
+  assert.equal(xClientCredentialsConfigured(read({ ...configured, X_CLIENT_SECRET: undefined })), false);
+  assert.equal(xClientCredentialsConfigured(read({})), false);
 });
 
 test('a session read with a missing or invalid key returns null and does not touch the row', async () => {

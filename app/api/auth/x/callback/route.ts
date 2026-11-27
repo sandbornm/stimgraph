@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { replaceXSessionRecord, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { withOwnerWork } from '@/lib/owner-work';
 import { readStateCookie } from '@/lib/session-cookie';
 import { clearOauthStateCookie, withRenewedSession } from '@/lib/x-auth-server';
 import { requestOrigin } from '@/lib/request-origin';
@@ -79,7 +80,8 @@ export async function GET(request: NextRequest) {
       expiresAt: Date.now() + token.expires_in * 1000,
       profile,
     });
-    await replaceXSessionRecord(sessionId, profile.id, payload, Date.now() + X_SESSION_TTL_MS);
+    const expiresAt = Date.now() + X_SESSION_TTL_MS;
+    await withOwnerWork(profile.id, () => replaceXSessionRecord(sessionId, profile.id, payload, expiresAt));
     return connectedPage(request, sessionId, returnPath);
   } catch {
     return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);

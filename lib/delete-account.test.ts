@@ -113,3 +113,53 @@ test('an unconfigured server deletes when the session row is expired and the own
     ownerIdFromRow: 'owner-expired',
   }), { delete: true, revoked: false, revokeSkipped: 'not_configured', ownerId: 'owner-expired' });
 });
+
+test('client credentials attempt revoke when only the token key is unusable, and unopened rows stay unconfirmed', () => {
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    clientCredentials: true,
+    allRevoked: false,
+    force: false,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: 'owner-1',
+  }), { delete: false, attemptRevoke: true, ownerId: 'owner-1' });
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    clientCredentials: true,
+    allRevoked: false,
+    force: true,
+    cookieValue: 'legacy.dotted.cookie',
+    ownerIdFromRow: 'owner-1',
+  }), { delete: false, status: 401, error: 'Connect X first.' });
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    clientCredentials: false,
+    allRevoked: false,
+    force: true,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: 'owner-1',
+  }), { delete: true, revoked: false, revokeSkipped: 'not_configured', ownerId: 'owner-1' });
+  assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: false, unopened: 1 }), {
+    delete: false,
+    status: 502,
+    error: REVOKE_UNCONFIRMED_ERROR,
+    revoked: false,
+    retryable: true,
+  });
+  assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: true, unopened: 1 }), {
+    delete: true,
+    revoked: false,
+  });
+  assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: false, unopened: 0 }), {
+    delete: true,
+    revoked: true,
+  });
+  const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
+  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('const active = await getActiveXSession'));
+  assert.match(unconfigured, /xClientCredentialsConfigured\(getRuntimeValue\)/);
+  assert.match(unconfigured, /deleteUnconfiguredAccount\(/);
+  assert.match(unconfigured, /openXSession/);
+  assert.match(unconfigured, /revokeXSession/);
+  assert.match(unconfigured, /\bforce,/);
+  assert.match(unconfigured, /revokeSkipped: 'not_configured'/);
+});

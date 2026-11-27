@@ -110,6 +110,28 @@ serial('a legacy payload still opens and is flagged for re-seal', async () => {
   });
 });
 
+serial('a legacy payload opens without a usable token key and a v2 payload does not', async () => {
+  const legacy = await sealLegacy('inert-legacy-secret');
+  const tokenKey = Buffer.from(keyMaterial()).toString('base64url');
+  const valid = (name: string) => name === 'STIMGRAPH_TOKEN_KEY' ? tokenKey : undefined;
+  const invalid = (name: string) => {
+    if (name === 'STIMGRAPH_TOKEN_KEY') return 'abcd';
+    if (name === 'X_CLIENT_SECRET') return 'inert-legacy-secret';
+    return undefined;
+  };
+  const missing = (name: string) => name === 'X_CLIENT_SECRET' ? 'inert-legacy-secret' : undefined;
+  const sealed = await sealXSession(session, valid);
+  const openedInvalid = await openXSession(legacy, invalid);
+  const openedMissing = await openXSession(legacy, missing);
+  assert.equal(openedInvalid?.needsReseal, true);
+  assert.deepEqual(openedInvalid?.session, session);
+  assert.equal(openedMissing?.needsReseal, true);
+  assert.deepEqual(openedMissing?.session, session);
+  assert.equal(await openXSession(sealed, invalid), null);
+  assert.equal(await openXSession(sealed, missing), null);
+  assert.equal((await openXSession(sealed, valid))?.needsReseal, false);
+});
+
 serial('sealing throws when STIMGRAPH_TOKEN_KEY is missing or the wrong length', async () => {
   await withEnv({ X_CLIENT_SECRET: 'inert-legacy-secret' }, async () => {
     await assert.rejects(() => sealXSession(session), /Missing required server configuration: STIMGRAPH_TOKEN_KEY/);

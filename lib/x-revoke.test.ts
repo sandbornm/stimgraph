@@ -122,6 +122,19 @@ test('a session stays unrevoked when refresh is confirmed and the access call is
   assert.deepEqual(calls, ['refresh_token', 'access_token']);
 });
 
+test('revocation basic auth uses only the client id and secret', () => {
+  const api = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'x-api.ts'), 'utf8');
+  const basic = api.slice(api.indexOf('function basicAuthorization'), api.indexOf('async function requestToken'));
+  assert.equal(basic.match(/requireRuntimeValue\(/g)?.length, 2);
+  assert.match(basic, /requireRuntimeValue\('X_CLIENT_ID'\)/);
+  assert.match(basic, /requireRuntimeValue\('X_CLIENT_SECRET'\)/);
+  assert.equal(basic.includes('STIMGRAPH_TOKEN_KEY'), false);
+  assert.equal(basic.includes('X_REDIRECT_URI'), false);
+  const revoke = api.slice(api.indexOf('export async function revokeXSession'), api.indexOf('export async function fetchXProfile'));
+  assert.match(revoke, /basicAuthorization\(\)/);
+  assert.equal(revoke.includes('STIMGRAPH_TOKEN_KEY'), false);
+});
+
 test('a failed revocation is retryable and force is the only way to delete', async () => {
   const fetchImpl: typeof fetch = async (_input, init) => {
     const hint = new URLSearchParams(String(init?.body ?? '')).get('token_type_hint') ?? '';

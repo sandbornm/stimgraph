@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { withOwnerWork } from './owner-work.ts';
-import { revokeAndDeleteOwner, type RevocableSession } from './owner-revoke-delete.ts';
+import { deleteUnconfiguredAccount, revokeAndDeleteOwner, type RevocableSession } from './owner-revoke-delete.ts';
 import { resolveStoredXSession } from './x-session-resolve.ts';
 
 type Session = RevocableSession & { expiresAt: number };
@@ -237,4 +240,127 @@ test('owner deletion refuses without force and proceeds with force', async () =>
   const forced = await run(true);
   assert.equal(forced.deleted, true);
   assert.deepEqual(forced.outcome, { deleted: true, revoked: false });
+});
+
+async function runUnconfigured(input: {
+  ownerId: string;
+  clientCredentials: boolean;
+  force: boolean;
+  payloads: string[];
+  open: (payload: string) => RevocableSession | null;
+}) {
+  const revoked: string[] = [];
+  let deleted = false;
+  const outcome = await deleteUnconfiguredAccount({
+    clientCredentials: input.clientCredentials,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: input.ownerId,
+    force: input.force,
+    withLock: withOwnerWork,
+    loadPayloads: async () => input.payloads,
+    openPayload: async (payload) => input.open(payload),
+    revoke: async (session) => {
+      revoked.push(session.refreshToken ?? '');
+      return true;
+    },
+    deleteData: async () => {
+      deleted = true;
+    },
+  });
+  return { outcome, revoked, deleted };
+}
+
+test('an unusable token key revokes an openable legacy row when client credentials exist', async () => {
+  const result = await runUnconfigured({
+    ownerId: 'owner-legacy-key',
+    clientCredentials: true,
+    force: false,
+    payloads: ['legacy-row'],
+    open: (payload) => payload === 'legacy-row'
+      ? { accessToken: 'access-legacy', refreshToken: 'refresh-legacy' }
+      : null,
+  });
+  assert.deepEqual(result.revoked, ['refresh-legacy']);
+  assert.equal(result.deleted, true);
+  assert.deepEqual(result.outcome, { deleted: true, revoked: true });
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'owner-revoke-delete.ts'), 'utf8');
+  const helper = source.slice(source.indexOf('export async function deleteUnconfiguredAccount'));
+  assert.match(helper, /current: null/);
+  assert.match(helper, /accountDeletionDecision\(/);
+});
+
+test('an unusable token key leaves an unopenable v2 row unconfirmed unless force deletes it', async () => {
+  async function once(force: boolean) {
+    return runUnconfigured({
+      ownerId: `owner-v2-key-${force}`,
+      clientCredentials: true,
+      force,
+      payloads: ['v2.iv.cipher'],
+      open: () => null,
+    });
+  }
+  const refused = await once(false);
+  assert.deepEqual(refused.revoked, []);
+  assert.equal(refused.deleted, false);
+  assert.deepEqual(refused.outcome, {
+    deleted: false,
+    status: 502,
+    error: 'X did not confirm that access was revoked. Nothing was deleted; try again.',
+    revoked: false,
+    retryable: true,
+  });
+  const forced = await once(true);
+  assert.deepEqual(forced.revoked, []);
+  assert.equal(forced.deleted, true);
+  assert.deepEqual(forced.outcome, { deleted: true, revoked: false });
+});
+
+test('an openable legacy row is revoked while an unopenable row still blocks deletion', async () => {
+  const result = await runUnconfigured({
+    ownerId: 'owner-mixed-key',
+    clientCredentials: true,
+    force: false,
+    payloads: ['legacy-row', 'v2.iv.cipher'],
+    open: (payload) => payload === 'legacy-row'
+      ? { accessToken: 'access-legacy', refreshToken: 'refresh-legacy' }
+      : null,
+  });
+  assert.deepEqual(result.revoked, ['refresh-legacy']);
+  assert.equal(result.deleted, false);
+  assert.deepEqual(result.outcome, {
+    deleted: false,
+    status: 502,
+    error: 'X did not confirm that access was revoked. Nothing was deleted; try again.',
+    revoked: false,
+    retryable: true,
+  });
+});
+
+test('missing client credentials delete the account and do not revoke', async () => {
+  let revoked = 0;
+  let loaded = 0;
+  let deleted = false;
+  const outcome = await deleteUnconfiguredAccount({
+    clientCredentials: false,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: 'owner-no-creds',
+    force: true,
+    withLock: withOwnerWork,
+    loadPayloads: async () => {
+      loaded += 1;
+      return ['legacy-row'];
+    },
+    openPayload: async () => ({ accessToken: 'access', refreshToken: 'refresh' }),
+    revoke: async () => {
+      revoked += 1;
+      return true;
+    },
+    deleteData: async () => {
+      deleted = true;
+    },
+  });
+  assert.equal(loaded, 0);
+  assert.equal(revoked, 0);
+  assert.equal(deleted, true);
+  assert.deepEqual(outcome, { deleted: true, revoked: false, revokeSkipped: 'not_configured' });
 });
