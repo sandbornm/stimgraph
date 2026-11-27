@@ -1,14 +1,16 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { replaceXSessionRecord, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { deleteXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { storeCallbackSession } from '@/lib/callback-session';
+import { ownerDeletedSince } from '@/lib/owner-deletions';
 import { withOwnerWork } from '@/lib/owner-work';
 import { readStateCookie } from '@/lib/session-cookie';
 import { clearOauthStateCookie, withRenewedSession } from '@/lib/x-auth-server';
 import { requestOrigin } from '@/lib/request-origin';
 import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
 import { xAuthConfigured } from '@/lib/x-auth-config';
-import { exchangeAuthorizationCode, fetchXProfile } from '@/lib/x-api';
-import { randomBase64Url, sealXSession } from '@/lib/x-session';
+import { exchangeAuthorizationCode, fetchXProfile, revokeXSession } from '@/lib/x-api';
+import { openXSession, randomBase64Url, sealXSession } from '@/lib/x-session';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,16 +64,15 @@ export async function GET(request: NextRequest) {
   const returnedState = request.nextUrl.searchParams.get('state');
   const browserState = readStateCookie(request.cookies);
   const pending = returnedState && browserState === returnedState ? await takeOauthPending(returnedState) : null;
-  const verifier = pending?.verifier;
   const returnPath = pending?.returnPath ?? null;
 
-  if (!code || !returnedState || !verifier) {
+  if (!code || !returnedState || !pending || !pending.verifier) {
     return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'invalid', returnPath)), request);
   }
 
   try {
     const redirectUri = requireRuntimeValue('X_REDIRECT_URI');
-    const token = await exchangeAuthorizationCode({ code, verifier, redirectUri });
+    const token = await exchangeAuthorizationCode({ code, verifier: pending.verifier, redirectUri });
     const profile = await fetchXProfile(token.access_token);
     const sessionId = randomBase64Url();
     const payload = await sealXSession({
@@ -81,7 +82,26 @@ export async function GET(request: NextRequest) {
       profile,
     });
     const expiresAt = Date.now() + X_SESSION_TTL_MS;
-    await withOwnerWork(profile.id, () => replaceXSessionRecord(sessionId, profile.id, payload, expiresAt));
+    const stored = await withOwnerWork(profile.id, () => storeCallbackSession({
+      ownerId: profile.id,
+      pendingCreatedAt: pending.createdAt,
+      session: {
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+      },
+      sessionId,
+      payload,
+      expiresAt,
+      ownerDeletedSince,
+      loadRows: loadOwnerXSessionRows,
+      openPayload: async (sealed) => (await openXSession(sealed))?.session ?? null,
+      insert: insertXSessionRecord,
+      deleteRow: deleteXSessionRecord,
+      revoke: revokeXSession,
+    }));
+    if (stored === 'rejected') {
+      return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
+    }
     return connectedPage(request, sessionId, returnPath);
   } catch {
     return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);

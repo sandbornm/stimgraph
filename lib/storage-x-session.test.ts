@@ -25,7 +25,7 @@ test('delete-owner lookup reads owner_id without an expiry filter or a delete', 
   assert.doesNotMatch(body, /expires_at/);
   assert.doesNotMatch(body, /DELETE/);
   const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
-  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('const active = await getActiveXSession'));
+  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('current: null'));
   assert.match(unconfigured, /loadXSessionOwnerId\(cookieValue\)/);
   assert.doesNotMatch(unconfigured, /loadXSessionRecord/);
   assert.doesNotMatch(unconfigured, /expires_at/);
@@ -40,4 +40,10 @@ test('re-sealing a legacy session is compare-and-swap so it cannot overwrite a t
   assert.ok(migrate);
   assert.match(migrate[0], /resealXSessionRecord\(id, stored\.ownerId, stored\.payload, payload\)/);
   assert.doesNotMatch(migrate[0], /saveXSessionRecord/);
+});
+
+test('reading an expired session row keeps its sealed refresh token for later revocation', () => {
+  const body = functionBody('loadXSessionRecord');
+  assert.match(body, /if \(row\.expires_at < Date\.now\(\)\) return null;/);
+  assert.doesNotMatch(body, /deleteXSessionRecord|DELETE/);
 });

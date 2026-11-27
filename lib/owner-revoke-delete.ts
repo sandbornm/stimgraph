@@ -1,4 +1,5 @@
 import { accountDeletionDecision, REVOKE_UNCONFIRMED_ERROR } from './delete-account.ts';
+import { recordOwnerDeleted } from './owner-deletions.ts';
 
 export type RevocableSession = {
   accessToken: string;
@@ -41,7 +42,7 @@ export async function revokeAndDeleteOwner<TSession extends RevocableSession>(in
     const decision = accountDeletionDecision({
       allRevoked,
       force: input.force,
-      unopened: input.current === null ? unopened : 0,
+      unopened,
     });
     if (!decision.delete) {
       return {
@@ -52,6 +53,7 @@ export async function revokeAndDeleteOwner<TSession extends RevocableSession>(in
       };
     }
     await input.deleteData(input.ownerId);
+    recordOwnerDeleted(input.ownerId, Date.now());
     return { deleted: true, revoked: decision.revoked };
   });
 }
@@ -101,6 +103,9 @@ export async function deleteUnconfiguredAccount<TSession extends RevocableSessio
   if (!('ownerId' in decision) || !('revokeSkipped' in decision)) {
     return { deleted: false, status: 401, error: 'Connect X first.' };
   }
-  await input.withLock(decision.ownerId, () => input.deleteData(decision.ownerId));
+  await input.withLock(decision.ownerId, async () => {
+    await input.deleteData(decision.ownerId);
+    recordOwnerDeleted(decision.ownerId, Date.now());
+  });
   return { deleted: true, revoked: false, revokeSkipped: decision.revokeSkipped };
 }

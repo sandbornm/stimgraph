@@ -106,7 +106,10 @@ try {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM x_sessions').get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
   writeFileSync(scenario, JSON.stringify({ count: 125 }));
-  assert.equal((await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount)).status, 200);
+  db.prepare('UPDATE x_sessions SET expires_at = 1').run();
+  const deleted = await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount);
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { deleted: true, revoked: true });
   for (const table of ['bookmarks', 'bookmark_observations', 'bookmark_sync_state', 'x_sessions', 'accounts']) {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
   }

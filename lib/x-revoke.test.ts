@@ -164,7 +164,7 @@ test('a failed revocation is retryable and force is the only way to delete', asy
   const forced = page.indexOf('sendDelete(true)');
   const alert = page.indexOf('payload?.revoked === false');
   assert.ok(send >= 0 && send < refused && refused < forced && forced < alert);
-  const configured = route.slice(route.indexOf('const active = await getActiveXSession'));
+  const configured = route.slice(route.indexOf('current: null'));
   const passed = configured.indexOf('force,');
   const retryable = configured.indexOf('retryable: true');
   const deleted = configured.indexOf('deleted: true');

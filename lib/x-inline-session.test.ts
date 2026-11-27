@@ -130,8 +130,16 @@ test('status clears a dotted cookie, and no cookie path can insert a session row
   const owner = readFileSync(join(root, 'lib/owner-request.ts'), 'utf8');
   assert.match(owner, /if \(cookie && !cookie\.includes\('\.'\)\)/);
   const disconnect = readFileSync(join(root, 'app/api/auth/x/disconnect/route.ts'), 'utf8');
-  assert.match(disconnect, /if \(cookie && !cookie\.includes\('\.'\)\) await deleteXSessionRecord\(cookie\)/);
+  assert.match(disconnect, /disconnectPresentedSession\(/);
   assert.match(disconnect, /clearSessionCookie/);
+  assert.equal(disconnect.includes('deleteXSessionRecord(cookie)'), false);
+  const helper = readFileSync(join(root, 'lib/disconnect-session.ts'), 'utf8');
+  assert.match(helper, /includes\('\.'\)/);
+  const lockAt = helper.indexOf('input.withLock(');
+  const openAt = helper.indexOf('input.openPayload(', lockAt);
+  const revokeAt = helper.indexOf('input.revoke(', lockAt);
+  const deleteAt = helper.indexOf('input.deleteRow(', lockAt);
+  assert.ok(lockAt >= 0 && lockAt < openAt && openAt < revokeAt && revokeAt < deleteAt);
   const data = readFileSync(join(root, 'app/api/data/route.ts'), 'utf8');
   assert.match(data, /cookieValue && !cookieValue\.includes\('\.'\)/);
 });

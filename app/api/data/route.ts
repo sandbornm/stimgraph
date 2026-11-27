@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionOwnerId } from '@/db/storage';
-import { deleteAccountRequestAllowed } from '@/lib/delete-account';
+import { configuredDeletionOwner, deleteAccountRequestAllowed } from '@/lib/delete-account';
 import { deleteUnconfiguredAccount, revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
 import { withOwnerWork } from '@/lib/owner-work';
 import { requestOrigin } from '@/lib/request-origin';
@@ -9,7 +9,7 @@ import { getRuntimeValue } from '@/lib/runtime-env';
 import { readSessionCookie } from '@/lib/session-cookie';
 import { revokeXSession } from '@/lib/x-api';
 import { xAuthConfigured, xClientCredentialsConfigured } from '@/lib/x-auth-config';
-import { clearSessionCookie, getActiveXSession } from '@/lib/x-auth-server';
+import { clearSessionCookie } from '@/lib/x-auth-server';
 import { openXSession } from '@/lib/x-session';
 
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -70,11 +70,17 @@ export async function DELETE(request: NextRequest) {
       revoked: outcome.revoked,
     }, { headers: noStore }), request);
   }
-  const active = await getActiveXSession(request);
-  if (!active) return NextResponse.json({ error: 'Connect X first.' }, { status: 401, headers: noStore });
+  const cookieValue = readSessionCookie(request.cookies).value;
+  const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
+    ? await loadXSessionOwnerId(cookieValue)
+    : null;
+  const owner = configuredDeletionOwner({ cookieValue, ownerIdFromRow });
+  if (!('ownerId' in owner)) {
+    return NextResponse.json({ error: owner.error }, { status: owner.status, headers: noStore });
+  }
   const outcome = await revokeAndDeleteOwner({
-    ownerId: active.session.profile.id,
-    current: active.session,
+    ownerId: owner.ownerId,
+    current: null,
     force,
     withLock: withOwnerWork,
     loadPayloads: loadOwnerXSessionPayloads,

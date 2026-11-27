@@ -213,7 +213,7 @@ export async function saveOauthPending(state: string, verifier: string, returnPa
   ]);
 }
 
-export async function takeOauthPending(state: string): Promise<{ verifier: string; returnPath: string | null } | null> {
+export async function takeOauthPending(state: string): Promise<{ verifier: string; returnPath: string | null; createdAt: number } | null> {
   await ensureSchema();
   const d1 = getD1();
   const row = await d1.prepare(
@@ -221,19 +221,15 @@ export async function takeOauthPending(state: string): Promise<{ verifier: strin
   ).bind(state).first<{ verifier: string; return_path: string | null; created_at: number }>();
   await d1.prepare('DELETE FROM oauth_pending WHERE state = ?').bind(state).run();
   if (!row || row.created_at < Date.now() - OAUTH_PENDING_TTL_MS) return null;
-  return { verifier: row.verifier, returnPath: row.return_path };
+  return { verifier: row.verifier, returnPath: row.return_path, createdAt: row.created_at };
 }
 
-export async function replaceXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
+export async function insertXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
   await ensureSchema();
-  const d1 = getD1();
   const now = Date.now();
-  await d1.batch([
-    d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
-    d1.prepare(
-      'INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(id, ownerId, payload, expiresAt, now, now),
-  ]);
+  await getD1().prepare(
+    'INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(id, ownerId, payload, expiresAt, now, now).run();
 }
 
 export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
@@ -257,16 +253,22 @@ export async function loadXSessionOwnerId(id: string): Promise<string | null> {
   return row?.owner_id ?? null;
 }
 
+export async function loadXSessionPayload(id: string): Promise<{ ownerId: string; payload: string } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT payload, owner_id FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ payload: string; owner_id: string }>();
+  if (!row) return null;
+  return { ownerId: row.owner_id, payload: row.payload };
+}
+
 export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
   await ensureSchema();
   const row = await getD1().prepare(
     'SELECT payload, owner_id, expires_at FROM x_sessions WHERE id = ?',
   ).bind(id).first<{ payload: string; owner_id: string; expires_at: number }>();
   if (!row) return null;
-  if (row.expires_at < Date.now()) {
-    await deleteXSessionRecord(id);
-    return null;
-  }
+  if (row.expires_at < Date.now()) return null;
   return { payload: row.payload, ownerId: row.owner_id, expiresAt: row.expires_at };
 }
 
@@ -281,6 +283,14 @@ export async function loadOwnerXSessionPayloads(ownerId: string): Promise<string
     .bind(ownerId)
     .all<{ payload: string }>();
   return rows.results.map((row) => row.payload);
+}
+
+export async function loadOwnerXSessionRows(ownerId: string): Promise<{ id: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT id, payload FROM x_sessions WHERE owner_id = ?')
+    .bind(ownerId)
+    .all<{ id: string; payload: string }>();
+  return rows.results.map((row) => ({ id: row.id, payload: row.payload }));
 }
 
 export async function ownerHasSession(ownerId: string): Promise<boolean> {

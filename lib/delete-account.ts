@@ -45,6 +45,16 @@ export function accountDeletionDecision(input: {
   };
 }
 
+export function configuredDeletionOwner(input: {
+  cookieValue?: string;
+  ownerIdFromRow?: string | null;
+}): { ownerId: string } | { status: 401; error: string } {
+  if (!input.cookieValue || input.cookieValue.includes('.') || !input.ownerIdFromRow) {
+    return { status: 401, error: 'Connect X first.' };
+  }
+  return { ownerId: input.ownerIdFromRow };
+}
+
 export function deleteAccountRequestAllowed(input: {
   origin: string | null;
   requestOrigin: string;

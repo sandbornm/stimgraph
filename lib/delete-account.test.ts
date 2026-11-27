@@ -155,7 +155,7 @@ test('client credentials attempt revoke when only the token key is unusable, and
     revoked: true,
   });
   const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
-  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('const active = await getActiveXSession'));
+  const unconfigured = route.slice(route.indexOf('if (!xAuthConfigured'), route.indexOf('current: null'));
   assert.match(unconfigured, /xClientCredentialsConfigured\(getRuntimeValue\)/);
   assert.match(unconfigured, /deleteUnconfiguredAccount\(/);
   assert.match(unconfigured, /openXSession/);

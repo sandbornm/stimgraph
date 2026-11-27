@@ -1,0 +1,56 @@
+export type CallbackToken = {
+  accessToken: string;
+  refreshToken?: string;
+};
+
+export function previousGrantReused(previous: CallbackToken, next: CallbackToken) {
+  if (previous.accessToken === next.accessToken) return true;
+  return Boolean(previous.refreshToken) && previous.refreshToken === next.refreshToken;
+}
+
+export async function storeCallbackSession(input: {
+  ownerId: string;
+  pendingCreatedAt: number;
+  session: CallbackToken;
+  sessionId: string;
+  payload: string;
+  expiresAt: number;
+  ownerDeletedSince: (ownerId: string, since: number) => boolean;
+  loadRows: (ownerId: string) => Promise<{ id: string; payload: string }[]>;
+  openPayload: (payload: string) => Promise<CallbackToken | null>;
+  insert: (id: string, ownerId: string, payload: string, expiresAt: number) => Promise<unknown>;
+  deleteRow: (id: string) => Promise<unknown>;
+  revoke: (session: CallbackToken) => Promise<boolean>;
+}): Promise<'stored' | 'rejected'> {
+  if (input.ownerDeletedSince(input.ownerId, input.pendingCreatedAt)) {
+    try {
+      await input.revoke(input.session);
+    } catch {
+      return 'rejected';
+    }
+    return 'rejected';
+  }
+  const previousRows = await input.loadRows(input.ownerId);
+  await input.insert(input.sessionId, input.ownerId, input.payload, input.expiresAt);
+  for (const row of previousRows) {
+    let previous: CallbackToken | null;
+    try {
+      previous = await input.openPayload(row.payload);
+    } catch {
+      continue;
+    }
+    if (!previous) continue;
+    if (previousGrantReused(previous, input.session)) {
+      await input.deleteRow(row.id);
+      continue;
+    }
+    let revoked = false;
+    try {
+      revoked = await input.revoke(previous);
+    } catch {
+      continue;
+    }
+    if (revoked) await input.deleteRow(row.id);
+  }
+  return 'stored';
+}
