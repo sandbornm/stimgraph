@@ -178,8 +178,10 @@ export async function ensureSchema() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`),
-    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
-    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_recent ON bookmarks(owner_id, created_at DESC, synced_at DESC)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author_profile ON bookmarks(owner_id, author_id, author_username, author_name, author_profile_image_url)'),
+    d1.prepare('DROP INDEX IF EXISTS idx_bookmarks_owner_created'),
+    d1.prepare('DROP INDEX IF EXISTS idx_bookmarks_owner_author'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmark_topics_owner_topic ON bookmark_topics(owner_id, topic_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_scouts_owner_scouted ON scouts(owner_id, scouted_at)'),

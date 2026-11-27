@@ -124,6 +124,8 @@ node scripts/test-local.mjs
 
 The local integration test needs the Next.js production build and a free loopback port 3012. It tests startup polling without a browser, persistence/catch-up across restart, token refresh, access control, HTTPS cookies/origins, assets, and deletion. The separate `test-background.mjs` tests the Cloudflare build in Miniflare, including rate limits and concurrent refreshes.
 
+`scripts/bench-local.mjs` is a manual benchmark and is not part of CI. From the repository root, run `pnpm run build:local && node scripts/bench-local.mjs`. `BENCH_BOOKMARKS` sets the imported bookmark count, `BENCH_EXTRA_COPIES` duplicates those rows, `BENCH_RUNS` sets the timed requests per route, and `BENCH_TOP` adds the slowest SQL statements to the JSON report.
+
 - [Tailscale Serve and identity headers](https://tailscale.com/docs/features/tailscale-serve): loopback binding, private access, header sanitization, tagged devices.
 - [Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve): persistent `--bg` and stopping a port.
 - [Next.js self-hosting](https://nextjs.org/docs/app/guides/self-hosting) and [instrumentation](https://nextjs.org/docs/app/guides/instrumentation): production server, reverse proxy, startup hooks.

@@ -1,5 +1,5 @@
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 
 export const accounts = sqliteTable('accounts', {
   id: text('id').primaryKey(),
@@ -28,8 +28,14 @@ export const bookmarks = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.ownerId, table.postId] }),
-    index('idx_bookmarks_owner_author').on(table.ownerId, table.authorId),
-    index('idx_bookmarks_owner_created').on(table.ownerId, table.createdAt),
+    index('idx_bookmarks_owner_recent').on(table.ownerId, desc(table.createdAt), desc(table.syncedAt)),
+    index('idx_bookmarks_owner_author_profile').on(
+      table.ownerId,
+      table.authorId,
+      table.authorUsername,
+      table.authorName,
+      table.authorProfileImageUrl,
+    ),
   ],
 );
 
