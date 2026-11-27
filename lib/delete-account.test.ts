@@ -43,6 +43,15 @@ test('delete account rejects a missing or foreign origin and a bad confirmation'
 test('deletion is refused when revocation failed unless force is set', () => {
   assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: false }), { delete: true, revoked: true });
   assert.deepEqual(accountDeletionDecision({ allRevoked: true, force: true }), { delete: true, revoked: true });
+  assert.deepEqual(accountDeletionDecision({ configured: true, allRevoked: true, force: false }), { delete: true, revoked: true });
+  assert.deepEqual(accountDeletionDecision({ configured: true, allRevoked: false, force: false }), {
+    delete: false,
+    status: 502,
+    error: REVOKE_UNCONFIRMED_ERROR,
+    revoked: false,
+    retryable: true,
+  });
+  assert.deepEqual(accountDeletionDecision({ configured: true, allRevoked: false, force: true }), { delete: true, revoked: false });
   assert.deepEqual(accountDeletionDecision({ allRevoked: false, force: false }), {
     delete: false,
     status: 502,
@@ -52,4 +61,44 @@ test('deletion is refused when revocation failed unless force is set', () => {
   });
   assert.equal(REVOKE_UNCONFIRMED_ERROR, 'X did not confirm that access was revoked. Nothing was deleted; try again.');
   assert.deepEqual(accountDeletionDecision({ allRevoked: false, force: true }), { delete: true, revoked: false });
+});
+
+test('an unconfigured server deletes from the session row and skips revoke', () => {
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    allRevoked: false,
+    force: false,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: 'owner-1',
+  }), { delete: true, revoked: false, revokeSkipped: 'not_configured', ownerId: 'owner-1' });
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    allRevoked: false,
+    force: false,
+    cookieValue: 'opaque-session',
+    ownerIdFromRow: null,
+  }), { delete: false, status: 401, error: 'Connect X first.' });
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    allRevoked: true,
+    force: true,
+    cookieValue: 'legacy.dotted.cookie',
+    ownerIdFromRow: 'owner-1',
+  }), { delete: false, status: 401, error: 'Connect X first.' });
+  assert.deepEqual(accountDeletionDecision({
+    configured: false,
+    allRevoked: false,
+    force: false,
+    cookieValue: undefined,
+    ownerIdFromRow: null,
+  }), { delete: false, status: 401, error: 'Connect X first.' });
+  const route = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/data/route.ts'), 'utf8');
+  const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/page.tsx'), 'utf8');
+  assert.match(route, /readSessionCookie/);
+  assert.match(route, /loadXSessionRecord/);
+  assert.match(route, /revokeSkipped: 'not_configured'/);
+  assert.equal(route.includes('The X connection is not configured on the server.'), false);
+  assert.match(page, /payload\?\.revoked === false/);
+  assert.match(page, /Revoke Stimgraph in your X settings \(Security and account access > Apps and sessions\)\./);
+  assert.match(page, /connection\.configured === false/);
 });

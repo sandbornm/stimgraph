@@ -1,7 +1,7 @@
 import { requireRuntimeValue } from './runtime-env';
 import type { XProfile, XSession } from './x-session';
 import { XRequestError, retryTime } from './x-errors';
-import { requestTokenRevocation } from './x-revoke';
+import { revokeTokenPair } from './x-revoke';
 
 const X_TOKEN_URL = 'https://api.x.com/2/oauth2/token';
 
@@ -80,22 +80,11 @@ export async function refreshXSession(session: XSession): Promise<XSession> {
 
 export async function revokeXSession(session: { accessToken: string; refreshToken?: string }): Promise<boolean> {
   try {
-    const authorization = basicAuthorization();
-    let ok = true;
-    if (session.refreshToken) {
-      const refreshOk = await requestTokenRevocation({
-        token: session.refreshToken,
-        tokenTypeHint: 'refresh_token',
-        authorization,
-      });
-      ok = refreshOk && ok;
-    }
-    const accessOk = await requestTokenRevocation({
-      token: session.accessToken,
-      tokenTypeHint: 'access_token',
-      authorization,
+    return await revokeTokenPair({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      authorization: basicAuthorization(),
     });
-    return accessOk && ok;
   } catch {
     return false;
   }

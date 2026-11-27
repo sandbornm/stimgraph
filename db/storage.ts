@@ -273,6 +273,14 @@ export async function loadOwnerXSessionPayloads(ownerId: string): Promise<string
   return rows.results.map((row) => row.payload);
 }
 
+export async function ownerHasSession(ownerId: string): Promise<boolean> {
+  await ensureSchema();
+  const row = await getD1().prepare('SELECT id FROM x_sessions WHERE owner_id = ? LIMIT 1')
+    .bind(ownerId)
+    .first<{ id: string }>();
+  return Boolean(row);
+}
+
 function topicId(label: string) {
   return label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72);
 }
@@ -826,6 +834,11 @@ export async function saveShare(id: string, ownerId: string, capsule: GraphCapsu
   await getD1().prepare(
     'INSERT INTO shares (id, owner_id, name, capsule_json, created_at) VALUES (?, ?, ?, ?, ?)',
   ).bind(id, ownerId, capsule.name, JSON.stringify(capsule), Date.now()).run();
+}
+
+export async function saveDemoShare(id: string, ownerId: string, capsule: GraphCapsule) {
+  if (!ownerId.startsWith('demo:')) throw new Error('Demo share owner required.');
+  await saveShare(id, ownerId, capsule);
 }
 
 export async function countSharesSince(ownerId: string, since: number) {

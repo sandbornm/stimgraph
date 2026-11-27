@@ -1,11 +1,12 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads } from '@/db/storage';
-import { deleteAccountRequestAllowed } from '@/lib/delete-account';
+import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionRecord } from '@/db/storage';
+import { accountDeletionDecision, deleteAccountRequestAllowed } from '@/lib/delete-account';
 import { revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
 import { withOwnerWork } from '@/lib/owner-work';
 import { requestOrigin } from '@/lib/request-origin';
 import { getRuntimeValue } from '@/lib/runtime-env';
+import { readSessionCookie } from '@/lib/session-cookie';
 import { revokeXSession } from '@/lib/x-api';
 import { xAuthConfigured } from '@/lib/x-auth-config';
 import { clearSessionCookie, getActiveXSession } from '@/lib/x-auth-server';
@@ -32,10 +33,29 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: noStore });
   }
   if (!xAuthConfigured(getRuntimeValue)) {
-    return NextResponse.json(
-      { error: 'The X connection is not configured on the server.' },
-      { status: 503, headers: noStore },
-    );
+    const cookieValue = readSessionCookie(request.cookies).value;
+    const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
+      ? (await loadXSessionRecord(cookieValue))?.ownerId ?? null
+      : null;
+    const decision = accountDeletionDecision({
+      configured: false,
+      allRevoked: false,
+      force: false,
+      cookieValue,
+      ownerIdFromRow,
+    });
+    if (!decision.delete || !('ownerId' in decision)) {
+      return NextResponse.json(
+        { error: decision.delete ? 'Connect X first.' : decision.error },
+        { status: decision.delete ? 401 : decision.status, headers: noStore },
+      );
+    }
+    await withOwnerWork(decision.ownerId, () => deleteOwnerDataUnlocked(decision.ownerId));
+    return clearSessionCookie(NextResponse.json({
+      deleted: true,
+      revoked: false,
+      revokeSkipped: 'not_configured',
+    }, { headers: noStore }), request);
   }
   const active = await getActiveXSession(request);
   if (!active) return NextResponse.json({ error: 'Connect X first.' }, { status: 401, headers: noStore });

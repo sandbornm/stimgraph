@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { requestOrigin } from '@/lib/request-origin';
 import { NextResponse } from 'next/server';
 import { deleteTrajectory, loadTrajectories, saveTrajectory } from '@/db/trajectories';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { parseTrajectoryDraft } from '@/lib/trajectory-model';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 
@@ -23,8 +24,9 @@ async function handle(request: NextRequest) {
     if (request.method === 'DELETE') {
       const id = request.nextUrl.searchParams.get('id');
       if (!id || id.length > 100) return respond({ error: 'Choose a saved trajectory.' }, 400);
-      const removed = await deleteTrajectory(ownerId, id);
-      return respond(removed ? { deleted: true } : { error: 'This trajectory was not found.' }, removed ? 200 : 404);
+      const removed = await withLiveOwner(ownerId, () => deleteTrajectory(ownerId, id));
+      if (!removed.live) return reply({ error: removed.error }, 401);
+      return respond(removed.value ? { deleted: true } : { error: 'This trajectory was not found.' }, removed.value ? 200 : 404);
     }
     let draft;
     try {
@@ -33,8 +35,9 @@ async function handle(request: NextRequest) {
       draft = parseTrajectoryDraft(JSON.parse(body));
     } catch { return respond({ error: 'The trajectory could not be read.' }, 400); }
     if (!draft) return respond({ error: 'Add a name and follow 2–80 different steps before saving.' }, 400);
-    const trajectory = await saveTrajectory(ownerId, draft);
-    return trajectory ? respond({ trajectory }, 201) : respond({ error: 'You have 100 saved trajectories. Remove one to save another.' }, 409);
+    const saved = await withLiveOwner(ownerId, () => saveTrajectory(ownerId, draft));
+    if (!saved.live) return reply({ error: saved.error }, 401);
+    return saved.value ? respond({ trajectory: saved.value }, 201) : respond({ error: 'You have 100 saved trajectories. Remove one to save another.' }, 409);
   } catch {
     return respond({ error: 'Trajectories are unavailable right now. Your current path is still on the canvas.' }, 503);
   }

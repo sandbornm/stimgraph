@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { storeBookmarks, storeFollows } from '@/db/storage';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { fetchXBookmarks, iterateXBookmarks } from '@/lib/x-bookmarks';
 import { fetchXFollowing, XFollowsScopeError } from '@/lib/x-following';
@@ -30,7 +31,8 @@ type SyncEvent = {
 async function importFollowing(accessToken: string, userId: string) {
   try {
     const result = await fetchXFollowing({ accessToken, userId, limit: 1000 });
-    await storeFollows({ ownerId: userId, follows: result.follows });
+    const saved = await withLiveOwner(userId, () => storeFollows({ ownerId: userId, follows: result.follows }));
+    if (!saved.live) return { following: 0, followingError: saved.error };
     return { following: result.follows.length };
   } catch (error) {
     const followingError = error instanceof XFollowsScopeError
@@ -65,11 +67,13 @@ export async function POST(request: NextRequest) {
         userId: active.session.profile.id,
         limit,
       });
-      const stored = await storeBookmarks({
+      const saved = await withLiveOwner(active.session.profile.id, () => storeBookmarks({
         owner: active.session.profile,
         bookmarks: result.bookmarks,
         skipUnchanged: live,
-      });
+      }));
+      if (!saved.live) return NextResponse.json({ error: saved.error }, { status: 401 });
+      const stored = saved.value;
       const response = NextResponse.json({
         imported: stored.stored,
         inserted: stored.inserted,
@@ -100,11 +104,17 @@ export async function POST(request: NextRequest) {
           userId: active.session.profile.id,
           limit,
         })) {
-          const stored = await storeBookmarks({
+          const saved = await withLiveOwner(active.session.profile.id, () => storeBookmarks({
             owner: active.session.profile,
             bookmarks: page.bookmarks,
             optimize: !page.hasMore,
-          });
+          }));
+          if (!saved.live) {
+            send({ type: 'error', error: saved.error, imported, inserted, insertedIds: allInsertedIds, limit });
+            controller.close();
+            return;
+          }
+          const stored = saved.value;
           imported += stored.stored;
           inserted += stored.inserted;
           allInsertedIds.push(...stored.insertedIds);

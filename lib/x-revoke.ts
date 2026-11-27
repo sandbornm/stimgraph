@@ -1,9 +1,18 @@
 const X_REVOKE_URL = 'https://api.x.com/2/oauth2/revoke';
 
-export function revocationConfirmed(status: number, body: unknown): boolean {
-  if (status < 200 || status >= 300) return false;
-  if (body !== null && typeof body === 'object' && 'revoked' in body && body.revoked === false) return false;
-  return true;
+export type RevocationResult = 'revoked' | 'failed';
+
+export function classifyRevocation(status: number, bodyText: string): RevocationResult {
+  if (status === 400 || status === 401) return 'revoked';
+  if (status < 200 || status >= 300) return 'failed';
+  const trimmed = bodyText.trim();
+  if (!trimmed) return 'failed';
+  try {
+    JSON.parse(trimmed);
+    return 'revoked';
+  } catch {
+    return 'failed';
+  }
 }
 
 export async function requestTokenRevocation(input: {
@@ -11,7 +20,7 @@ export async function requestTokenRevocation(input: {
   tokenTypeHint: 'refresh_token' | 'access_token';
   authorization: string;
   fetchImpl?: typeof fetch;
-}): Promise<boolean> {
+}): Promise<RevocationResult> {
   const fetchImpl = input.fetchImpl ?? fetch;
   try {
     const response = await fetchImpl(X_REVOKE_URL, {
@@ -24,18 +33,34 @@ export async function requestTokenRevocation(input: {
       cache: 'no-store',
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) {
-      await response.arrayBuffer().catch(() => undefined);
-      return false;
-    }
-    const text = await response.text();
-    if (!text.trim()) return true;
-    try {
-      return revocationConfirmed(response.status, JSON.parse(text) as unknown);
-    } catch {
-      return true;
-    }
+    return classifyRevocation(response.status, await response.text());
   } catch {
-    return false;
+    return 'failed';
   }
+}
+
+export async function revokeTokenPair(input: {
+  accessToken: string;
+  refreshToken?: string;
+  authorization: string;
+  fetchImpl?: typeof fetch;
+}): Promise<boolean> {
+  let failed = false;
+  if (input.refreshToken) {
+    const refresh = await requestTokenRevocation({
+      token: input.refreshToken,
+      tokenTypeHint: 'refresh_token',
+      authorization: input.authorization,
+      fetchImpl: input.fetchImpl,
+    });
+    if (refresh === 'failed') failed = true;
+  }
+  const access = await requestTokenRevocation({
+    token: input.accessToken,
+    tokenTypeHint: 'access_token',
+    authorization: input.authorization,
+    fetchImpl: input.fetchImpl,
+  });
+  if (access === 'failed') failed = true;
+  return !failed;
 }

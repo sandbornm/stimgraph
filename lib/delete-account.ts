@@ -3,10 +3,30 @@ export const DELETE_ACCOUNT_CONFIRMATION = 'delete my account';
 export const REVOKE_UNCONFIRMED_ERROR = 'X did not confirm that access was revoked. Nothing was deleted; try again.';
 
 export type AccountDeletionDecision =
-  | { delete: true; revoked: boolean }
-  | { delete: false; status: 502; error: string; revoked: false; retryable: true };
+  | { delete: true; revoked: true }
+  | { delete: true; revoked: false }
+  | { delete: true; revoked: false; revokeSkipped: 'not_configured'; ownerId: string }
+  | { delete: false; status: 502; error: string; revoked: false; retryable: true }
+  | { delete: false; status: 401; error: string };
 
-export function accountDeletionDecision(input: { allRevoked: boolean; force: boolean }): AccountDeletionDecision {
+export function accountDeletionDecision(input: {
+  allRevoked: boolean;
+  force: boolean;
+  configured?: boolean;
+  cookieValue?: string;
+  ownerIdFromRow?: string | null;
+}): AccountDeletionDecision {
+  if (input.configured === false) {
+    if (!input.cookieValue || input.cookieValue.includes('.') || !input.ownerIdFromRow) {
+      return { delete: false, status: 401, error: 'Connect X first.' };
+    }
+    return {
+      delete: true,
+      revoked: false,
+      revokeSkipped: 'not_configured',
+      ownerId: input.ownerIdFromRow,
+    };
+  }
   if (input.allRevoked) return { delete: true, revoked: true };
   if (input.force) return { delete: true, revoked: false };
   return {

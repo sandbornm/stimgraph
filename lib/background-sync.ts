@@ -1,4 +1,5 @@
 import { getD1 } from '@/db/index';
+import { labelPendingBookmarks } from '@/db/jev';
 import { ensureSchema, storeBookmarks } from '@/db/storage';
 import { getStoredXSessionLocked } from './x-auth-server';
 import { tokenKeyUsable } from './x-session-seal';
@@ -7,7 +8,6 @@ import { getRuntimeValue } from './runtime-env';
 import { XRequestError } from './x-errors';
 import { BACKFILL_LIMIT, BACKFILL_PAGE_SIZE, POLL_INTERVAL_MS, POLL_LEASE_MS, nextPageStep, pollDelay } from './background-policy';
 import { withOwnerWork } from './owner-work';
-import { labelAfterSync } from './jev-sync';
 
 export async function pollConnectedAccounts() {
   if (getRuntimeValue('STIMGRAPH_BACKGROUND_POLL') !== 'true') return;
@@ -62,7 +62,15 @@ export async function pollConnectedAccounts() {
           backfill_completed_at = COALESCE(backfill_completed_at, ?)
           WHERE owner_id = ?`).bind(Date.now(), Date.now() + POLL_INTERVAL_MS, fetched, continuation,
           backfillDone ? Date.now() : null, stored.owner_id).run();
-        await labelAfterSync(stored.owner_id);
+        const jevKey = getRuntimeValue('TYPESAFE_API_KEY');
+        if (jevKey) {
+          try {
+            const labeled = await labelPendingBookmarks(stored.owner_id, jevKey, { limit: 200 });
+            if (labeled.considered) console.info(`[stimgraph] jev labeled ${labeled.labeled}/${labeled.considered} (accepted ${labeled.accepted}, failed ${labeled.failed})`);
+          } catch (error) {
+            console.warn(`[stimgraph] jev labeling skipped: ${error instanceof Error ? error.name : 'error'}`);
+          }
+        }
       } catch (error) {
         const failures = claimed.failures + 1;
         const status = error instanceof XRequestError ? `x_${error.status}` : 'temporary_error';

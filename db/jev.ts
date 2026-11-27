@@ -24,9 +24,18 @@ export async function saveJevTopics(ownerId: string, input: unknown) {
 
 export type JevRunResult = { considered: number; labeled: number; accepted: number; failed: number; skipped: number };
 
-export async function labelPendingBookmarks(ownerId: string, apiKey: string, { limit = 1000, fetchImpl }: {
+type JevPending = { postId: string; text: string; author: string; textHash: string };
+
+export type PreparedJevLabels = {
+  topicsHash: string;
+  skipped: number;
+  pending: JevPending[];
+  results: Array<{ item: JevPending; value?: { label: string; confidence: number; model: string }; error?: unknown }>;
+};
+
+export async function prepareJevLabels(ownerId: string, apiKey: string, { limit = 1000, fetchImpl }: {
   limit?: number; fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
-} = {}): Promise<JevRunResult> {
+} = {}): Promise<PreparedJevLabels> {
   await ensureSchema();
   const d1 = getD1();
   const topics = await loadJevTopics(ownerId);
@@ -35,7 +44,7 @@ export async function labelPendingBookmarks(ownerId: string, apiKey: string, { l
     FROM bookmarks b LEFT JOIN jev_labels l ON l.owner_id = b.owner_id AND l.post_id = b.post_id
     WHERE b.owner_id = ? ORDER BY b.synced_at DESC`).bind(ownerId)
     .all<{ post_id: string; text: string; author_username: string; text_hash: string | null; topics_hash: string | null }>()).results;
-  const pending: Array<{ postId: string; text: string; author: string; textHash: string }> = [];
+  const pending: JevPending[] = [];
   let skipped = 0;
   for (const row of rows) {
     const textHash = await fingerprint(row.text);
@@ -44,17 +53,23 @@ export async function labelPendingBookmarks(ownerId: string, apiKey: string, { l
   }
   const results = await mapLimit(pending, JEV_CONCURRENCY, (item) =>
     labelPost({ apiKey, text: item.text, author: item.author, topics, fetchImpl }));
+  return { topicsHash, skipped, pending, results };
+}
+
+export async function applyJevLabels(ownerId: string, prepared: PreparedJevLabels): Promise<JevRunResult> {
+  await ensureSchema();
+  const d1 = getD1();
   const now = Date.now();
   const statements: D1PreparedStatement[] = [];
   let accepted = 0;
-  for (const { item, value } of results) {
+  for (const { item, value } of prepared.results) {
     if (!value) continue;
     statements.push(
       d1.prepare(`INSERT INTO jev_labels(owner_id, post_id, text_hash, topics_hash, label, confidence, model, labeled_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, post_id) DO UPDATE SET text_hash = excluded.text_hash,
         topics_hash = excluded.topics_hash, label = excluded.label, confidence = excluded.confidence,
         model = excluded.model, labeled_at = excluded.labeled_at`)
-        .bind(ownerId, item.postId, item.textHash, topicsHash, value.label, value.confidence, value.model, now),
+        .bind(ownerId, item.postId, item.textHash, prepared.topicsHash, value.label, value.confidence, value.model, now),
       d1.prepare(`DELETE FROM bookmark_topics WHERE owner_id = ? AND post_id = ? AND source = 'jev'`).bind(ownerId, item.postId),
     );
     const label = acceptedLabel(value);
@@ -70,6 +85,18 @@ export async function labelPendingBookmarks(ownerId: string, apiKey: string, { l
     );
   }
   for (let index = 0; index < statements.length; index += 80) await d1.batch(statements.slice(index, index + 80));
-  const failed = results.filter((r) => r.error).length;
-  return { considered: pending.length, labeled: results.length - failed, accepted, failed, skipped };
+  const failed = prepared.results.filter((item) => item.error).length;
+  return {
+    considered: prepared.pending.length,
+    labeled: prepared.results.length - failed,
+    accepted,
+    failed,
+    skipped: prepared.skipped,
+  };
+}
+
+export async function labelPendingBookmarks(ownerId: string, apiKey: string, options: {
+  limit?: number; fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
+} = {}): Promise<JevRunResult> {
+  return applyJevLabels(ownerId, await prepareJevLabels(ownerId, apiKey, options));
 }

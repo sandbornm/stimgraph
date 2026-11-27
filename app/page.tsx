@@ -2710,6 +2710,10 @@ export default function Home() {
       setSyncMessage('The account could not be deleted.');
       return;
     }
+    const payload = await response.json().catch(() => null) as { revoked?: boolean } | null;
+    if (payload?.revoked === false) {
+      window.alert('Your Stimgraph data was deleted. Revoke Stimgraph in your X settings (Security and account access > Apps and sessions).');
+    }
     window.history.replaceState(null, '', '/');
     window.location.reload();
   };
@@ -3140,10 +3144,10 @@ export default function Home() {
                 </section>
               ) : null}
 
-              {connection.connected ? (
+              {connection.connected || connection.configured === false ? (
                 <section className="data-controls" aria-label="Local data controls">
                   <p className="eyebrow">DATA CONTROLS</p>
-                  <button type="button" onClick={disconnect}>Disconnect browser session</button>
+                  {connection.connected ? <button type="button" onClick={disconnect}>Disconnect browser session</button> : null}
                   <button className="danger-link" type="button" onClick={deleteAccount}>Delete account</button>
                   <small>Disconnecting leaves your local map in place. Deleting the account removes the local map and asks X to revoke this connection.</small>
                 </section>
