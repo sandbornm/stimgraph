@@ -1,13 +1,34 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { withOwnerWork } from './owner-work.ts';
 import { configuredDeletionOwner } from './delete-account.ts';
-import { ownerDeletedSince } from './owner-deletions.ts';
+import { ownerDeletedSince, recordOwnerDeleted, type OwnerDeletionDb } from './owner-deletions.ts';
 import { deleteUnconfiguredAccount, revokeAndDeleteOwner, type RevocableSession } from './owner-revoke-delete.ts';
 import { resolveStoredXSession } from './x-session-resolve.ts';
+
+const ignoreDeleted = async () => {};
+
+function openDeleted() {
+  const database = new DatabaseSync(':memory:');
+  database.exec('CREATE TABLE deleted_owners (owner_id TEXT PRIMARY KEY NOT NULL, deleted_at INTEGER NOT NULL)');
+  const connect = (): OwnerDeletionDb => ({
+    async run(sql, params) {
+      database.prepare(sql).run(...params);
+    },
+    async first(sql, params) {
+      const row = database.prepare(sql).get(...params);
+      return (row as Record<string, unknown> | undefined) ?? null;
+    },
+  });
+  return {
+    recordOwnerDeleted: (ownerId: string, at: number) => recordOwnerDeleted(connect(), ownerId, at),
+    ownerDeletedSince: (ownerId: string, since: number) => ownerDeletedSince(connect(), ownerId, since),
+  };
+}
 
 type Session = RevocableSession & { expiresAt: number };
 
@@ -47,6 +68,7 @@ test('a refresh waits until owner deletion finishes and then sees the row gone',
     deleteData: async () => {
       row = null;
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   await deleteIsInside;
 
@@ -128,6 +150,7 @@ test('revocation uses the token persisted by a refresh that finished before dele
       deletedPayload = payload;
       payload = '';
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   assert.deepEqual(revoked.map((session) => session.refreshToken), ['refresh-2']);
   assert.equal(deletedPayload, 'sealed-new');
@@ -184,6 +207,7 @@ test('a fresh token does not take the owner lock', async () => {
 });
 
 test('an unreadable stored row is a retryable 502 unless force deletes it', async () => {
+  const tomb = openDeleted();
   async function run(force: boolean) {
     let deleted = false;
     const revoked: string[] = [];
@@ -201,6 +225,7 @@ test('an unreadable stored row is a retryable 502 unless force deletes it', asyn
       deleteData: async () => {
         deleted = true;
       },
+      recordOwnerDeleted: tomb.recordOwnerDeleted,
     });
     return { outcome, deleted, revoked };
   }
@@ -208,7 +233,7 @@ test('an unreadable stored row is a retryable 502 unless force deletes it', asyn
   const refused = await run(false);
   assert.deepEqual(refused.revoked, ['refresh']);
   assert.equal(refused.deleted, false);
-  assert.equal(ownerDeletedSince('owner-unreadable-false', 0), false);
+  assert.equal(await tomb.ownerDeletedSince('owner-unreadable-false', 0), false);
   assert.deepEqual(refused.outcome, {
     deleted: false,
     revoked: false,
@@ -219,7 +244,7 @@ test('an unreadable stored row is a retryable 502 unless force deletes it', asyn
   const forced = await run(true);
   assert.deepEqual(forced.revoked, ['refresh']);
   assert.equal(forced.deleted, true);
-  assert.equal(ownerDeletedSince('owner-unreadable-true', 0), true);
+  assert.equal(await tomb.ownerDeletedSince('owner-unreadable-true', 0), true);
   assert.deepEqual(forced.outcome, { deleted: true, revoked: false });
 });
 
@@ -241,6 +266,7 @@ test('owner deletion refuses without force and proceeds with force', async () =>
       deleteData: async () => {
         deleted = true;
       },
+      recordOwnerDeleted: ignoreDeleted,
     });
     return { outcome, deleted, revoked };
   }
@@ -284,6 +310,7 @@ async function runUnconfigured(input: {
     deleteData: async () => {
       deleted = true;
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   return { outcome, revoked, deleted };
 }
@@ -376,6 +403,7 @@ test('missing client credentials delete the account and do not revoke', async ()
     deleteData: async () => {
       deleted = true;
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   assert.equal(loaded, 0);
   assert.equal(revoked, 0);
@@ -413,6 +441,7 @@ test('an expired row with a refresh token is revoked and deleted, not dropped wi
     deleteData: async () => {
       row = null;
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   assert.deepEqual(revoked, ['refresh-expired']);
   assert.equal(row, null);

@@ -15,14 +15,14 @@ export async function storeCallbackSession(input: {
   sessionId: string;
   payload: string;
   expiresAt: number;
-  ownerDeletedSince: (ownerId: string, since: number) => boolean;
+  ownerDeletedSince: (ownerId: string, since: number) => boolean | Promise<boolean>;
   loadRows: (ownerId: string) => Promise<{ id: string; payload: string }[]>;
   openPayload: (payload: string) => Promise<CallbackToken | null>;
   insert: (id: string, ownerId: string, payload: string, expiresAt: number) => Promise<unknown>;
   deleteRow: (id: string) => Promise<unknown>;
   revoke: (session: CallbackToken) => Promise<boolean>;
 }): Promise<'stored' | 'rejected'> {
-  if (input.ownerDeletedSince(input.ownerId, input.pendingCreatedAt)) {
+  if (await input.ownerDeletedSince(input.ownerId, input.pendingCreatedAt)) {
     try {
       await input.revoke(input.session);
     } catch {

@@ -1,10 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { deleteXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
 import { storeCallbackSession } from '@/lib/callback-session';
-import { ownerDeletedSince } from '@/lib/owner-deletions';
 import { withOwnerWork } from '@/lib/owner-work';
-import { readStateCookie } from '@/lib/session-cookie';
+import { readStateCookie, sessionCookieSecure } from '@/lib/session-cookie';
 import { clearOauthStateCookie, withRenewedSession } from '@/lib/x-auth-server';
 import { requestOrigin } from '@/lib/request-origin';
 import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
@@ -62,7 +61,7 @@ export async function GET(request: NextRequest) {
   }
   const code = request.nextUrl.searchParams.get('code');
   const returnedState = request.nextUrl.searchParams.get('state');
-  const browserState = readStateCookie(request.cookies);
+  const browserState = readStateCookie(request.cookies, sessionCookieSecure(requestOrigin(request)));
   const pending = returnedState && browserState === returnedState ? await takeOauthPending(returnedState) : null;
   const returnPath = pending?.returnPath ?? null;
 

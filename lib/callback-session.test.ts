@@ -1,13 +1,34 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { storeCallbackSession, type CallbackToken } from './callback-session.ts';
-import { ownerDeletedSince, recordOwnerDeleted } from './owner-deletions.ts';
+import { ownerDeletedSince, recordOwnerDeleted, type OwnerDeletionDb } from './owner-deletions.ts';
 import { withOwnerWork } from './owner-work.ts';
 import { deleteUnconfiguredAccount, revokeAndDeleteOwner } from './owner-revoke-delete.ts';
 import { OWNER_SCOPED_TABLES } from './owner-tables.ts';
+
+const ignoreDeleted = async () => {};
+
+function deletionDb() {
+  const database = new DatabaseSync(':memory:');
+  database.exec('CREATE TABLE deleted_owners (owner_id TEXT PRIMARY KEY NOT NULL, deleted_at INTEGER NOT NULL)');
+  const db: OwnerDeletionDb = {
+    async run(sql, params) {
+      database.prepare(sql).run(...params);
+    },
+    async first(sql, params) {
+      const row = database.prepare(sql).get(...params);
+      return (row as Record<string, unknown> | undefined) ?? null;
+    },
+  };
+  return {
+    recordOwnerDeleted: (ownerId: string, at: number) => recordOwnerDeleted(db, ownerId, at),
+    ownerDeletedSince: (ownerId: string, since: number) => ownerDeletedSince(db, ownerId, since),
+  };
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,6 +68,7 @@ test('a callback write either lands before delete loads payloads or after delete
     deleteData: async () => {
       wipe(before);
     },
+    recordOwnerDeleted: ignoreDeleted,
   });
   assert.deepEqual(beforeRevoked, ['refresh-new']);
   assert.deepEqual(beforeOutcome, { deleted: true, revoked: true });
@@ -54,6 +76,7 @@ test('a callback write either lands before delete loads payloads or after delete
   assert.equal((before.get('bookmarks') ?? []).includes('old-bookmark-text'), false);
 
   const afterOwner = 'callback-after-delete';
+  const afterTomb = deletionDb();
   const after = emptyStore();
   after.set('x_sessions', ['refresh-old']);
   after.set('accounts', ['old-account']);
@@ -91,6 +114,7 @@ test('a callback write either lands before delete loads payloads or after delete
       log.push('delete');
       wipe(after);
     },
+    recordOwnerDeleted: afterTomb.recordOwnerDeleted,
   });
   await inside;
   const callback = withOwnerWork(afterOwner, async () => {
@@ -102,7 +126,7 @@ test('a callback write either lands before delete loads payloads or after delete
       sessionId: 'sid-new',
       payload: 'refresh-new',
       expiresAt: 9_000,
-      ownerDeletedSince,
+      ownerDeletedSince: afterTomb.ownerDeletedSince,
       loadRows: async () => (after.get('x_sessions') ?? []).map((payload) => ({ id: payload, payload })),
       openPayload: async (payload) => ({ accessToken: payload, refreshToken: payload }),
       insert: async () => {
@@ -183,6 +207,7 @@ test('a callback write either lands before delete loads payloads or after delete
 
 test('a sign-in started after the delete is stored normally', async () => {
   const ownerId = 'callback-signin-after-delete';
+  const tomb = deletionDb();
   const rows: string[] = [];
   await revokeAndDeleteOwner({
     ownerId,
@@ -193,6 +218,7 @@ test('a sign-in started after the delete is stored normally', async () => {
     openPayload: async () => null,
     revoke: async () => true,
     deleteData: async () => {},
+    recordOwnerDeleted: tomb.recordOwnerDeleted,
   });
   const outcome = await storeCallbackSession({
     ownerId,
@@ -201,7 +227,7 @@ test('a sign-in started after the delete is stored normally', async () => {
     sessionId: 'sid-after',
     payload: 'sealed-new',
     expiresAt: 9_000,
-    ownerDeletedSince,
+    ownerDeletedSince: tomb.ownerDeletedSince,
     loadRows: async () => [],
     openPayload: async () => null,
     insert: async (_id, _owner, payload) => {
@@ -220,7 +246,8 @@ test('a sign-in started after the delete is stored normally', async () => {
 
 test('a deletion at the pending row time revokes the new grant and stores nothing', async () => {
   const ownerId = 'callback-deleted-at-pending';
-  recordOwnerDeleted(ownerId, 80);
+  const tomb = deletionDb();
+  await tomb.recordOwnerDeleted(ownerId, 80);
   const outcome = await storeCallbackSession({
     ownerId,
     pendingCreatedAt: 80,
@@ -228,7 +255,7 @@ test('a deletion at the pending row time revokes the new grant and stores nothin
     sessionId: 'sid-eq',
     payload: 'sealed-eq',
     expiresAt: 90,
-    ownerDeletedSince,
+    ownerDeletedSince: tomb.ownerDeletedSince,
     loadRows: async () => {
       throw new Error('loaded');
     },
@@ -251,6 +278,7 @@ test('a deletion at the pending row time revokes the new grant and stores nothin
 
 test('an unconfigured delete blocks a sign-in that started earlier', async () => {
   const ownerId = 'callback-unconfigured-delete';
+  const tomb = deletionDb();
   const pendingCreatedAt = Date.now();
   const rows: string[] = [];
   const revoked: string[] = [];
@@ -264,6 +292,7 @@ test('an unconfigured delete blocks a sign-in that started earlier', async () =>
     openPayload: async () => null,
     revoke: async () => true,
     deleteData: async () => {},
+    recordOwnerDeleted: tomb.recordOwnerDeleted,
   });
   const outcome = await storeCallbackSession({
     ownerId,
@@ -272,7 +301,7 @@ test('an unconfigured delete blocks a sign-in that started earlier', async () =>
     sessionId: 'sid-unconfigured',
     payload: 'sealed-new',
     expiresAt: 9_000,
-    ownerDeletedSince,
+    ownerDeletedSince: tomb.ownerDeletedSince,
     loadRows: async () => rows.map((payload) => ({ id: payload, payload })),
     openPayload: async () => null,
     insert: async (_id, _owner, payload) => {

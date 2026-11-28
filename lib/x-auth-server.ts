@@ -13,6 +13,8 @@ import { refreshErrorAction } from './x-errors';
 import { requestOrigin } from './request-origin';
 import { getRuntimeValue } from './runtime-env';
 import {
+  cookieWriteOptions,
+  hostnameFromOrigin,
   readSessionCookie,
   renewedSessionCookieWrites,
   sessionCookieAttributes,
@@ -35,21 +37,20 @@ export function sessionCookieOptions(request: NextRequest) {
 function applyCookieWrites(response: NextResponse, request: NextRequest, writes: CookieWrite[]) {
   const base = sessionCookieOptions(request);
   for (const write of writes) {
-    response.cookies.set(write.name, write.value, { ...base, secure: write.secure, maxAge: write.maxAge });
+    response.cookies.set(write.name, write.value, { ...base, ...cookieWriteOptions(write) });
   }
   return response;
 }
 
 export function withRenewedSession(response: NextResponse, request: NextRequest, renewedCookie?: string) {
   const options = sessionCookieOptions(request);
-  const read = readSessionCookie(request.cookies);
+  const read = readSessionCookie(request.cookies, options.secure);
   return applyCookieWrites(response, request, renewedSessionCookieWrites({
     secure: options.secure,
     maxAge: options.maxAge,
-    presentedValue: read.value,
+    presentedValue: read,
     renewedValue: renewedCookie,
-    legacyAccepted: read.legacy,
-    legacyValue: read.value,
+    hostname: hostnameFromOrigin(requestOrigin(request)),
   }));
 }
 
@@ -59,6 +60,7 @@ export function clearSessionCookie(response: NextResponse, request: NextRequest)
     secure: options.secure,
     maxAge: options.maxAge,
     clear: true,
+    hostname: hostnameFromOrigin(requestOrigin(request)),
   }));
 }
 
@@ -71,7 +73,10 @@ export function assignStateCookie(response: NextResponse, request: NextRequest, 
 
 export function clearOauthStateCookie(response: NextResponse, request: NextRequest) {
   const options = sessionCookieOptions(request);
-  return applyCookieWrites(response, request, stateCookieClearWrites(options.secure));
+  return applyCookieWrites(response, request, stateCookieClearWrites(
+    options.secure,
+    hostnameFromOrigin(requestOrigin(request)),
+  ));
 }
 
 async function persistSession(session: XSession, sessionId: string) {
@@ -128,7 +133,8 @@ export async function getStoredXSessionLocked(id: string) {
 }
 
 export async function getActiveXSession(request: NextRequest): Promise<{ session: XSession; renewedCookie?: string } | null> {
-  const cookie = readSessionCookie(request.cookies).value;
+  const options = sessionCookieOptions(request);
+  const cookie = readSessionCookie(request.cookies, options.secure);
   return resolvePresentedXSession({
     cookie,
     keyUsable: tokenKeyUsable(getRuntimeValue),

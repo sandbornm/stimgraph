@@ -76,10 +76,10 @@ test('a dotted presented cookie expires both session cookie names and an opaque 
     maxAge: 100,
     presentedValue: 'iv.ciphertext',
     renewedValue: 'iv.ciphertext',
-    legacyAccepted: true,
-    legacyValue: 'iv.ciphertext',
+    hostname: 'stimgraph.mytailnet.ts.net',
   }), [
     { name: 'stim_x_session', value: '', maxAge: 0, secure: true },
+    { name: 'stim_x_session', value: '', maxAge: 0, secure: true, domain: 'mytailnet.ts.net' },
     { name: '__Host-stim_x_session', value: '', maxAge: 0, secure: true },
   ]);
   assert.deepEqual(renewedSessionCookieWrites({
@@ -103,8 +103,6 @@ test('a dotted presented cookie expires both session cookie names and an opaque 
     maxAge: 100,
     presentedValue: 'fixture-session',
     renewedValue: 'fixture-session',
-    legacyAccepted: true,
-    legacyValue: 'fixture-session',
   }), [
     { name: 'stim_x_session', value: 'fixture-session', maxAge: 100, secure: false },
   ]);
@@ -122,7 +120,7 @@ test('status clears a dotted cookie, and no cookie path can insert a session row
   assert.doesNotMatch(persist, /replaceXSessionRecord|randomBase64Url|sessionId\?:/);
   assert.equal(server.includes('replaceXSessionRecord'), false);
   assert.equal(server.includes('randomBase64Url'), false);
-  assert.match(server, /presentedValue: read\.value/);
+  assert.match(server, /presentedValue: read,/);
   const status = readFileSync(join(root, 'app/api/auth/x/status/route.ts'), 'utf8');
   assert.match(status, /presented\?\.includes\('\.'\)/);
   assert.match(status, /withRenewedSession\(response, request, active\?\.renewedCookie\)/);
@@ -138,8 +136,10 @@ test('status clears a dotted cookie, and no cookie path can insert a session row
   const lockAt = helper.indexOf('input.withLock(');
   const openAt = helper.indexOf('input.openPayload(', lockAt);
   const revokeAt = helper.indexOf('input.revoke(', lockAt);
-  const deleteAt = helper.indexOf('input.deleteRow(', lockAt);
-  assert.ok(lockAt >= 0 && lockAt < openAt && openAt < revokeAt && revokeAt < deleteAt);
+  const confirmed = helper.indexOf('if (revoked)', revokeAt);
+  const deleteAt = helper.indexOf('input.deleteRow(', confirmed);
+  assert.ok(lockAt >= 0 && lockAt < openAt && openAt < revokeAt && revokeAt < confirmed && confirmed < deleteAt);
+  assert.match(helper, /input\.expireRow\(cookie\)/);
   const data = readFileSync(join(root, 'app/api/data/route.ts'), 'utf8');
   assert.match(data, /cookieValue && !cookieValue\.includes\('\.'\)/);
 });

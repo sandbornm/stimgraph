@@ -18,8 +18,7 @@ export function classifyRevocation(status: number, bodyText: string): Revocation
   const body = revocationBody(bodyText);
   if (status === 400) return body?.error === 'invalid_token' ? 'revoked' : 'failed';
   if (status < 200 || status >= 300 || !body) return 'failed';
-  if (!Object.hasOwn(body, 'revoked') || body.revoked === true) return 'revoked';
-  return 'failed';
+  return body.revoked === true ? 'revoked' : 'failed';
 }
 
 export async function requestTokenRevocation(input: {

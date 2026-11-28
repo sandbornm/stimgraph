@@ -46,7 +46,7 @@ test('route labeling checks the owner before TypeSafe and still guards the write
         liveCalls.push('guard');
         return withOwnerWork(ownerId, action);
       },
-      hasSession: async () => {
+      isLive: async () => {
         liveCalls.push('guard-check');
         return true;
       },
@@ -72,7 +72,7 @@ test('route labeling checks the owner before TypeSafe and still guards the write
       return prepared;
     }, {
       withLock: withOwnerWork,
-      hasSession: async () => sessions > 0,
+      isLive: async () => sessions > 0,
     }),
   });
   assert.deepEqual(lost, { live: false, error: ACCOUNT_DELETED_ERROR });

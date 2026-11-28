@@ -218,3 +218,8 @@ export const backgroundHealth = sqliteTable('background_health', {
   id: integer('id').primaryKey(),
   heartbeatAt: integer('heartbeat_at').notNull(),
 }, (table) => [check('background_health_singleton', sql`${table.id} = 1`)]);
+
+export const deletedOwners = sqliteTable('deleted_owners', {
+  ownerId: text('owner_id').primaryKey(),
+  deletedAt: integer('deleted_at').notNull(),
+});

@@ -36,9 +36,11 @@ test('a call is revoked only for a confirming 2xx JSON body or HTTP 400 invalid_
   assert.equal(classifyRevocation(429, JSON.stringify({ error: 'rate_limit' })), 'failed');
   assert.equal(classifyRevocation(503, JSON.stringify({})), 'failed');
   assert.equal(classifyRevocation(400, JSON.stringify({ error: 'invalid_token' })), 'revoked');
-  assert.equal(classifyRevocation(200, JSON.stringify({})), 'revoked');
+  assert.equal(classifyRevocation(200, JSON.stringify({})), 'failed');
+  assert.equal(classifyRevocation(200, JSON.stringify({ token: 'inert' })), 'failed');
   assert.equal(classifyRevocation(200, JSON.stringify({ revoked: true })), 'revoked');
-  assert.equal(classifyRevocation(201, JSON.stringify({ scope: 'tweet.read' })), 'revoked');
+  assert.equal(classifyRevocation(200, JSON.stringify({ revoked: 'true' })), 'failed');
+  assert.equal(classifyRevocation(201, JSON.stringify({ scope: 'tweet.read' })), 'failed');
 });
 
 test('non-JSON success, 429, 5xx, and a thrown fetch are failures and nothing is logged', async () => {
@@ -52,7 +54,8 @@ test('non-JSON success, 429, 5xx, and a thrown fetch are failures and nothing is
   }
   try {
     assert.equal(await revoke(async () => jsonResponse(200, { revoked: true })), 'revoked');
-    assert.equal(await revoke(async () => jsonResponse(200, {})), 'revoked');
+    assert.equal(await revoke(async () => jsonResponse(200, {})), 'failed');
+    assert.equal(await revoke(async () => jsonResponse(201, { scope: 'tweet.read' })), 'failed');
     assert.equal(await revoke(async () => jsonResponse(200, { revoked: false })), 'failed');
     assert.equal(await revoke(async () => jsonResponse(400, { error: 'invalid_token' })), 'revoked');
     assert.equal(await revoke(async () => jsonResponse(400, { error: 'invalid_request' })), 'failed');
@@ -110,7 +113,7 @@ test('a session stays unrevoked when refresh is confirmed and the access call is
   const fetchImpl: typeof fetch = async (_input, init) => {
     const hint = new URLSearchParams(String(init?.body ?? '')).get('token_type_hint') ?? '';
     calls.push(hint);
-    if (hint === 'refresh_token') return jsonResponse(200, {});
+    if (hint === 'refresh_token') return jsonResponse(200, { revoked: true });
     return new Response('', { status: 401 });
   };
   assert.equal(await revokeTokenPair({

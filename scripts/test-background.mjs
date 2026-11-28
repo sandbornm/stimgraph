@@ -116,7 +116,7 @@ try {
   tokenFailure = false;
   tokenCalls = 0;
   await db.prepare('UPDATE bookmark_sync_state SET next_poll_at = 0').run();
-  const authenticated = { ...requestHeaders, Cookie: 'stim_x_session=fixture-session' };
+  const authenticated = { ...requestHeaders, Cookie: '__Host-stim_x_session=fixture-session' };
   await Promise.all([worker.scheduled(), request('/api/auth/x/status', authenticated)]);
   assert.equal(tokenCalls, 1, 'Browser and scheduler rotate a token only once');
   const xBeforeRead = calls;

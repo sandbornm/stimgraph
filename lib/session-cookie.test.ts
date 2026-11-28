@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  cookieParentDomain,
+  cookieWriteOptions,
   readSessionCookie,
   readStateCookie,
   sessionCookieAttributes,
@@ -78,59 +80,113 @@ test('plain http loopback keeps unprefixed session and state cookie names', () =
   assert.deepEqual(stateCookieSet(false), { name: 'stim_x_oauth_state', maxAge: 600, secure: false });
 });
 
-test('session cookie reads prefer the __Host- name and flag a legacy cookie', () => {
-  assert.deepEqual(readSessionCookie(jar({
+test('https reads only __Host- cookies and http loopback reads only unprefixed names', () => {
+  const both = jar({
     '__Host-stim_x_session': 'current',
     stim_x_session: 'legacy',
-  })), { value: 'current', legacy: false });
-  assert.deepEqual(readSessionCookie(jar({ stim_x_session: 'legacy' })), { value: 'legacy', legacy: true });
-  assert.deepEqual(readSessionCookie(jar({})), { value: undefined, legacy: false });
-  assert.equal(readStateCookie(jar({
-    '__Host-stim_x_oauth_state': 'current',
-    stim_x_oauth_state: 'legacy',
-  })), 'current');
-  assert.equal(readStateCookie(jar({ stim_x_oauth_state: 'legacy' })), 'legacy');
-  assert.equal(readStateCookie(jar({})), undefined);
+    '__Host-stim_x_oauth_state': 'state-current',
+    stim_x_oauth_state: 'state-legacy',
+  });
+  assert.equal(readSessionCookie(jar({ stim_x_session: 'legacy' }), true), undefined);
+  assert.equal(readStateCookie(jar({ stim_x_oauth_state: 'legacy' }), true), undefined);
+  assert.equal(readSessionCookie(both, true), 'current');
+  assert.equal(readStateCookie(both, true), 'state-current');
+  assert.equal(readSessionCookie(jar({ '__Host-stim_x_session': 'current' }), false), undefined);
+  assert.equal(readStateCookie(jar({ '__Host-stim_x_oauth_state': 'state-current' }), false), undefined);
+  assert.equal(readSessionCookie(both, false), 'legacy');
+  assert.equal(readStateCookie(both, false), 'state-legacy');
+  assert.equal(readSessionCookie(jar({}), true), undefined);
+  assert.equal(readStateCookie(jar({}), false), undefined);
 });
 
-test('a legacy session cookie is reissued under __Host- and the old name expires', () => {
-  assert.deepEqual(sessionCookieWrites({
-    secure: true,
-    maxAge: 100,
-    legacyAccepted: true,
-    legacyValue: 'old-id',
-    clear: false,
-  }), [
-    { name: '__Host-stim_x_session', value: 'old-id', maxAge: 100, secure: true },
-    { name: 'stim_x_session', value: '', maxAge: 0, secure: true },
-  ]);
-  assert.deepEqual(sessionCookieWrites({
-    secure: true,
-    maxAge: 100,
-    renewedValue: 'new-id',
-    legacyAccepted: true,
-    legacyValue: 'old-id',
-    clear: false,
-  })[0], { name: '__Host-stim_x_session', value: 'new-id', maxAge: 100, secure: true });
+test('http loopback writes the unprefixed name and https writes only __Host-', () => {
   assert.deepEqual(sessionCookieWrites({
     secure: false,
     maxAge: 100,
     renewedValue: 'id',
-    legacyAccepted: true,
-    legacyValue: 'id',
     clear: false,
   }), [
     { name: 'stim_x_session', value: 'id', maxAge: 100, secure: false },
   ]);
-  assert.deepEqual(sessionCookieWrites({ secure: false, maxAge: 100, clear: true }), [
+  assert.deepEqual(sessionCookieWrites({
+    secure: true,
+    maxAge: 100,
+    renewedValue: 'id',
+    clear: false,
+  }), [
+    { name: '__Host-stim_x_session', value: 'id', maxAge: 100, secure: true },
+  ]);
+  assert.deepEqual(sessionCookieWrites({ secure: true, maxAge: 100, clear: false }), []);
+  assert.equal(readFileSync(join(root, 'lib/session-cookie.ts'), 'utf8').includes('legacyAccepted'), false);
+  assert.equal(readFileSync(join(root, 'lib/x-auth-server.ts'), 'utf8').includes('legacyAccepted'), false);
+});
+
+test('clear writes on a tailnet host expire the parent domain for unprefixed names only', () => {
+  const host = 'stimgraph.mytailnet.ts.net';
+  const session = sessionCookieWrites({ secure: true, maxAge: 100, clear: true, hostname: host });
+  const state = stateCookieClearWrites(true, host);
+  assert.deepEqual(session, [
+    { name: 'stim_x_session', value: '', maxAge: 0, secure: true },
+    { name: 'stim_x_session', value: '', maxAge: 0, secure: true, domain: 'mytailnet.ts.net' },
+    { name: '__Host-stim_x_session', value: '', maxAge: 0, secure: true },
+  ]);
+  assert.deepEqual(state, [
+    { name: 'stim_x_oauth_state', value: '', maxAge: 0, secure: true },
+    { name: 'stim_x_oauth_state', value: '', maxAge: 0, secure: true, domain: 'mytailnet.ts.net' },
+    { name: '__Host-stim_x_oauth_state', value: '', maxAge: 0, secure: true },
+  ]);
+  for (const write of [...session, ...state, ...sessionCookieWrites({
+    secure: true,
+    maxAge: 100,
+    renewedValue: 'id',
+    clear: false,
+  })]) {
+    if (write.name.startsWith('__Host-')) assert.equal(Object.hasOwn(write, 'domain'), false, write.name);
+  }
+  assert.deepEqual(sessionCookieWrites({ secure: false, maxAge: 100, clear: true, hostname: 'localhost' }), [
     { name: 'stim_x_session', value: '', maxAge: 0, secure: false },
     { name: '__Host-stim_x_session', value: '', maxAge: 0, secure: true },
   ]);
-  for (const write of stateCookieClearWrites(true)) assert.equal(Object.hasOwn(write, 'domain'), false);
   assert.deepEqual(stateCookieClearWrites(false), [
     { name: 'stim_x_oauth_state', value: '', maxAge: 0, secure: false },
     { name: '__Host-stim_x_oauth_state', value: '', maxAge: 0, secure: true },
   ]);
+  for (const write of stateCookieClearWrites(true)) assert.equal(Object.hasOwn(write, 'domain'), false);
+  assert.equal(Object.hasOwn(cookieWriteOptions({
+    name: '__Host-stim_x_session',
+    value: '',
+    maxAge: 0,
+    secure: true,
+    domain: 'mytailnet.ts.net',
+  }), 'domain'), false);
+  assert.deepEqual(cookieWriteOptions({
+    name: 'stim_x_session',
+    value: '',
+    maxAge: 0,
+    secure: true,
+    domain: 'mytailnet.ts.net',
+  }), { secure: true, maxAge: 0, domain: 'mytailnet.ts.net' });
+  assert.equal(Object.hasOwn(cookieWriteOptions({
+    name: 'stim_x_session',
+    value: 'id',
+    maxAge: 100,
+    secure: false,
+  }), 'domain'), false);
+});
+
+test('cookieParentDomain returns a parent only for a multi-label hostname', () => {
+  assert.equal(cookieParentDomain('localhost'), undefined);
+  assert.equal(cookieParentDomain('LOCALHOST'), undefined);
+  assert.equal(cookieParentDomain('127.0.0.1'), undefined);
+  assert.equal(cookieParentDomain('192.168.0.1'), undefined);
+  assert.equal(cookieParentDomain('::1'), undefined);
+  assert.equal(cookieParentDomain('[::1]'), undefined);
+  assert.equal(cookieParentDomain('2001:db8::1'), undefined);
+  assert.equal(cookieParentDomain('example.com'), undefined);
+  assert.equal(cookieParentDomain('stimgraph.example'), undefined);
+  assert.equal(cookieParentDomain('a.b.c'), 'b.c');
+  assert.equal(cookieParentDomain('stimgraph.mytailnet.ts.net'), 'mytailnet.ts.net');
+  assert.equal(cookieParentDomain('Stimgraph.MyTailnet.ts.net'), 'mytailnet.ts.net');
 });
 
 test('session and state cookies are read and cleared through the shared helpers', () => {
@@ -149,4 +205,19 @@ test('session and state cookies are read and cleared through the shared helpers'
   assert.equal(owner.includes('X_SESSION_COOKIE'), false);
   const server = readFileSync(join(root, 'lib/x-auth-server.ts'), 'utf8');
   assert.match(server, /readSessionCookie/);
+  assert.equal(server.match(/readSessionCookie\(request\.cookies, options\.secure\)/g)?.length, 2);
+  assert.match(server, /cookieWriteOptions\(write\)/);
+  assert.equal(server.includes('domain: write.domain'), false);
+  assert.match(server, /hostname: hostnameFromOrigin\(requestOrigin\(request\)\)/);
+  assert.match(server, /stateCookieClearWrites\(\s*options\.secure,\s*hostnameFromOrigin\(requestOrigin\(request\)\),?\s*\)/);
+  const reads = [
+    ['app/api/auth/x/callback/route.ts', /readStateCookie\(request\.cookies, sessionCookieSecure\(requestOrigin\(request\)\)\)/g, 1],
+    ['app/api/auth/x/disconnect/route.ts', /readSessionCookie\(request\.cookies, sessionCookieSecure\(requestOrigin\(request\)\)\)/g, 1],
+    ['app/api/auth/x/status/route.ts', /readSessionCookie\(request\.cookies, sessionCookieSecure\(requestOrigin\(request\)\)\)/g, 1],
+    ['app/api/data/route.ts', /readSessionCookie\(request\.cookies, sessionCookieSecure\(requestOrigin\(request\)\)\)/g, 2],
+    ['lib/owner-request.ts', /readSessionCookie\(request\.cookies, sessionCookieSecure\(requestOrigin\(request\)\)\)/g, 1],
+  ] as const;
+  for (const [file, pattern, count] of reads) {
+    assert.equal(readFileSync(join(root, file), 'utf8').match(pattern)?.length, count, file);
+  }
 });

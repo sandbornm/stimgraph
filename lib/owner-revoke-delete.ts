@@ -1,5 +1,4 @@
 import { accountDeletionDecision, REVOKE_UNCONFIRMED_ERROR } from './delete-account.ts';
-import { recordOwnerDeleted } from './owner-deletions.ts';
 
 export type RevocableSession = {
   accessToken: string;
@@ -17,6 +16,7 @@ export async function revokeAndDeleteOwner<TSession extends RevocableSession>(in
   openPayload: (payload: string) => Promise<TSession | null>;
   revoke: (session: TSession) => Promise<boolean>;
   deleteData: (ownerId: string) => Promise<void>;
+  recordOwnerDeleted: (ownerId: string, at: number) => Promise<void> | void;
 }): Promise<
   | { deleted: true; revoked: boolean }
   | { deleted: false; revoked: false; retryable: true; error: string }
@@ -53,7 +53,7 @@ export async function revokeAndDeleteOwner<TSession extends RevocableSession>(in
       };
     }
     await input.deleteData(input.ownerId);
-    recordOwnerDeleted(input.ownerId, Date.now());
+    await input.recordOwnerDeleted(input.ownerId, Date.now());
     return { deleted: true, revoked: decision.revoked };
   });
 }
@@ -68,6 +68,7 @@ export async function deleteUnconfiguredAccount<TSession extends RevocableSessio
   openPayload: (payload: string) => Promise<TSession | null>;
   revoke: (session: TSession) => Promise<boolean>;
   deleteData: (ownerId: string) => Promise<void>;
+  recordOwnerDeleted: (ownerId: string, at: number) => Promise<void> | void;
 }): Promise<
   | { deleted: true; revoked: boolean; revokeSkipped?: 'not_configured' }
   | { deleted: false; status: 401; error: string }
@@ -91,6 +92,7 @@ export async function deleteUnconfiguredAccount<TSession extends RevocableSessio
       openPayload: input.openPayload,
       revoke: input.revoke,
       deleteData: input.deleteData,
+      recordOwnerDeleted: input.recordOwnerDeleted,
     });
     if (!outcome.deleted) {
       return { deleted: false, status: 502, error: outcome.error, revoked: false, retryable: true };
@@ -105,7 +107,7 @@ export async function deleteUnconfiguredAccount<TSession extends RevocableSessio
   }
   await input.withLock(decision.ownerId, async () => {
     await input.deleteData(decision.ownerId);
-    recordOwnerDeleted(decision.ownerId, Date.now());
+    await input.recordOwnerDeleted(decision.ownerId, Date.now());
   });
   return { deleted: true, revoked: false, revokeSkipped: decision.revokeSkipped };
 }

@@ -96,7 +96,7 @@ try {
   await waitFor(() => db.prepare('SELECT backfill_completed_at AS t FROM bookmark_sync_state').get()?.t > 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
   assert.match(output, /bookmark backfill completed: 125 fetched in 2 X calls/);
-  const cookie = { Cookie: 'stim_x_session=fixture-session', Origin: origin };
+  const cookie = { Cookie: '__Host-stim_x_session=fixture-session', Origin: origin };
   const deleteAccount = { method: 'DELETE', body: JSON.stringify({ confirm: 'delete my account' }) };
   assert.equal((await request('/api/data', { ...cookie, Origin: 'https://untrusted.invalid', 'Content-Type': 'application/json' }, deleteAccount)).status, 403);
   writeFileSync(scenario, JSON.stringify({ count: 125, revokeFailure: 503 }));

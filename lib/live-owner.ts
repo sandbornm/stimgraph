@@ -4,7 +4,7 @@ export type OwnerLock = <T>(ownerId: string, action: () => Promise<T>) => Promis
 
 export type LiveOwnerDeps = {
   withLock: OwnerLock;
-  hasSession: (ownerId: string) => Promise<boolean>;
+  isLive: (ownerId: string) => Promise<boolean>;
 };
 
 export type LiveOwnerResult<T> =
@@ -17,7 +17,7 @@ export async function withLiveOwner<T>(
   deps: LiveOwnerDeps,
 ): Promise<LiveOwnerResult<T>> {
   return deps.withLock(ownerId, async () => {
-    if (!await deps.hasSession(ownerId)) return { live: false, error: ACCOUNT_DELETED_ERROR };
+    if (!await deps.isLive(ownerId)) return { live: false, error: ACCOUNT_DELETED_ERROR };
     return { live: true, value: await write() };
   });
 }

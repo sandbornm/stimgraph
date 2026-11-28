@@ -7,6 +7,7 @@ export async function disconnectPresentedSession<TSession extends RevocableSessi
   openPayload: (payload: string) => Promise<TSession | null>;
   revoke: (session: TSession) => Promise<boolean>;
   deleteRow: (id: string) => Promise<unknown>;
+  expireRow: (id: string) => Promise<unknown>;
 }): Promise<{ revoked: boolean }> {
   const cookie = input.cookieValue;
   if (!cookie || cookie.includes('.')) return { revoked: false };
@@ -14,23 +15,31 @@ export async function disconnectPresentedSession<TSession extends RevocableSessi
   if (!found) return { revoked: false };
   return input.withLock(found.ownerId, async () => {
     const row = await input.loadRow(cookie);
+    if (!row) {
+      await input.deleteRow(cookie);
+      return { revoked: false };
+    }
     let session: TSession | null = null;
-    if (row) {
-      try {
-        session = await input.openPayload(row.payload);
-      } catch {
-        session = null;
-      }
+    try {
+      session = await input.openPayload(row.payload);
+    } catch {
+      session = null;
+    }
+    if (!session) {
+      await input.expireRow(cookie);
+      return { revoked: false };
     }
     let revoked = false;
-    if (session) {
-      try {
-        revoked = await input.revoke(session);
-      } catch {
-        revoked = false;
-      }
+    try {
+      revoked = await input.revoke(session);
+    } catch {
+      revoked = false;
     }
-    await input.deleteRow(cookie);
-    return { revoked };
+    if (revoked) {
+      await input.deleteRow(cookie);
+      return { revoked: true };
+    }
+    await input.expireRow(cookie);
+    return { revoked: false };
   });
 }

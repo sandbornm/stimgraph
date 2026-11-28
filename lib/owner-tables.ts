@@ -32,6 +32,10 @@ export const NON_OWNER_TABLES = [
     table: 'background_health',
     reason: 'Singleton scheduler heartbeat, not user-scoped.',
   },
+  {
+    table: 'deleted_owners',
+    reason: 'Retained so a sign-in started before the delete cannot recreate the account.',
+  },
 ] as const;
 
 function ident(value: string) {

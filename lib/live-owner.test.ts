@@ -125,7 +125,7 @@ test('a write queued while deletion holds the lock is skipped once the session i
     return 'stored';
   }, {
     withLock: withOwnerWork,
-    hasSession: async () => {
+    isLive: async () => {
       log.push('check');
       return sessions > 0;
     },
@@ -150,7 +150,7 @@ test('a write that commits before deletion is removed with the account', async (
     return 'stored';
   }, {
     withLock: withOwnerWork,
-    hasSession: async () => sessions > 0,
+    isLive: async () => sessions > 0,
   });
   assert.deepEqual(outcome, { live: true, value: 'stored' });
   assert.deepEqual(rows, ['bookmark']);
@@ -165,7 +165,7 @@ test('a write that commits before deletion is removed with the account', async (
     return 'again';
   }, {
     withLock: withOwnerWork,
-    hasSession: async () => sessions > 0,
+    isLive: async () => sessions > 0,
   });
   assert.deepEqual(later, { live: false, error: ACCOUNT_DELETED_ERROR });
   assert.deepEqual(rows, []);

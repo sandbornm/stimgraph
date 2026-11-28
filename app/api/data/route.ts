@@ -1,12 +1,12 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionOwnerId } from '@/db/storage';
+import { deleteOwnerDataUnlocked, loadOwnerXSessionPayloads, loadXSessionOwnerId, recordOwnerDeleted } from '@/db/storage';
 import { configuredDeletionOwner, deleteAccountRequestAllowed } from '@/lib/delete-account';
 import { deleteUnconfiguredAccount, revokeAndDeleteOwner } from '@/lib/owner-revoke-delete';
 import { withOwnerWork } from '@/lib/owner-work';
 import { requestOrigin } from '@/lib/request-origin';
 import { getRuntimeValue } from '@/lib/runtime-env';
-import { readSessionCookie } from '@/lib/session-cookie';
+import { readSessionCookie, sessionCookieSecure } from '@/lib/session-cookie';
 import { revokeXSession } from '@/lib/x-api';
 import { xAuthConfigured, xClientCredentialsConfigured } from '@/lib/x-auth-config';
 import { clearSessionCookie } from '@/lib/x-auth-server';
@@ -33,7 +33,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: noStore });
   }
   if (!xAuthConfigured(getRuntimeValue)) {
-    const cookieValue = readSessionCookie(request.cookies).value;
+    const cookieValue = readSessionCookie(request.cookies, sessionCookieSecure(requestOrigin(request)));
     const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
       ? await loadXSessionOwnerId(cookieValue)
       : null;
@@ -47,6 +47,7 @@ export async function DELETE(request: NextRequest) {
       openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
       revoke: revokeXSession,
       deleteData: deleteOwnerDataUnlocked,
+      recordOwnerDeleted,
     });
     if (!outcome.deleted) {
       if (outcome.status === 502) {
@@ -70,7 +71,7 @@ export async function DELETE(request: NextRequest) {
       revoked: outcome.revoked,
     }, { headers: noStore }), request);
   }
-  const cookieValue = readSessionCookie(request.cookies).value;
+  const cookieValue = readSessionCookie(request.cookies, sessionCookieSecure(requestOrigin(request)));
   const ownerIdFromRow = cookieValue && !cookieValue.includes('.')
     ? await loadXSessionOwnerId(cookieValue)
     : null;
@@ -87,6 +88,7 @@ export async function DELETE(request: NextRequest) {
     openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
     revoke: revokeXSession,
     deleteData: deleteOwnerDataUnlocked,
+    recordOwnerDeleted,
   });
   if (!outcome.deleted) {
     return NextResponse.json({

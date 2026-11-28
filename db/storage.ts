@@ -6,6 +6,12 @@ import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
 import { hostFromUrl, urlsFromBookmark } from '@/lib/rss-probe';
 import type { StoredFollow } from '@/lib/x-following';
+import {
+  ownerDeletedSince as deletedSince,
+  ownerIsLive as liveOwner,
+  recordOwnerDeleted as writeOwnerDeleted,
+  type OwnerDeletionDb,
+} from '@/lib/owner-deletions';
 import { ownerDeleteStatements } from '@/lib/owner-tables';
 import type { XProfile } from '@/lib/x-session';
 
@@ -178,6 +184,10 @@ export async function ensureSchema() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS deleted_owners (
+      owner_id TEXT PRIMARY KEY NOT NULL,
+      deleted_at INTEGER NOT NULL
+    )`),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_recent ON bookmarks(owner_id, created_at DESC, synced_at DESC)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author_profile ON bookmarks(owner_id, author_id, author_username, author_name, author_profile_image_url)'),
     d1.prepare('DROP INDEX IF EXISTS idx_bookmarks_owner_created'),
@@ -277,6 +287,11 @@ export async function deleteXSessionRecord(id: string) {
   await getD1().prepare('DELETE FROM x_sessions WHERE id = ?').bind(id).run();
 }
 
+export async function expireXSessionRecord(id: string) {
+  await ensureSchema();
+  await getD1().prepare('UPDATE x_sessions SET expires_at = ? WHERE id = ?').bind(Date.now() - 1, id).run();
+}
+
 export async function loadOwnerXSessionPayloads(ownerId: string): Promise<string[]> {
   await ensureSchema();
   const rows = await getD1().prepare('SELECT payload FROM x_sessions WHERE owner_id = ?')
@@ -299,6 +314,33 @@ export async function ownerHasSession(ownerId: string): Promise<boolean> {
     .bind(ownerId)
     .first<{ id: string }>();
   return Boolean(row);
+}
+
+function ownerDeletionDb(): OwnerDeletionDb {
+  const d1 = getD1();
+  return {
+    async run(sql, params) {
+      await d1.prepare(sql).bind(...params).run();
+    },
+    async first<T extends Record<string, unknown>>(sql: string, params: (string | number)[]) {
+      return d1.prepare(sql).bind(...params).first<T>();
+    },
+  };
+}
+
+export async function recordOwnerDeleted(ownerId: string, at: number) {
+  await ensureSchema();
+  await writeOwnerDeleted(ownerDeletionDb(), ownerId, at);
+}
+
+export async function ownerDeletedSince(ownerId: string, since: number) {
+  await ensureSchema();
+  return deletedSince(ownerDeletionDb(), ownerId, since);
+}
+
+export async function ownerIsLive(ownerId: string) {
+  await ensureSchema();
+  return liveOwner(ownerDeletionDb(), ownerId);
 }
 
 function topicId(label: string) {

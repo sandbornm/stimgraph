@@ -33,12 +33,17 @@ test('every table is owner-scoped or explicitly excluded from account deletion',
     assert.ok(discovered.has(table), table);
     assert.ok(reason.length > 10, table);
   }
-  assert.deepEqual(NON_OWNER_TABLES.map((entry) => entry.table), ['oauth_pending', 'background_health']);
+  assert.deepEqual(NON_OWNER_TABLES.map((entry) => entry.table), ['oauth_pending', 'background_health', 'deleted_owners']);
+  assert.match(
+    NON_OWNER_TABLES.find((entry) => entry.table === 'deleted_owners')?.reason ?? '',
+    /sign-in started before the delete cannot recreate the account/,
+  );
   const statements = ownerDeleteStatements();
   assert.equal(statements.length, OWNER_SCOPED_TABLES.length);
   assert.deepEqual(statements.slice(-2), [
     'DELETE FROM x_sessions WHERE owner_id = ?',
     'DELETE FROM accounts WHERE id = ?',
   ]);
+  assert.equal(statements.some((sql) => sql.includes('deleted_owners')), false);
   assert.match(readFileSync(join(root, 'db/storage.ts'), 'utf8'), /ownerDeleteStatements\(\)/);
 });
