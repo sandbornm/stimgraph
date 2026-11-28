@@ -243,3 +243,10 @@ export const schemaEvents = sqliteTable('schema_events', {
   id: text('id').primaryKey(),
   appliedAt: integer('applied_at').notNull(),
 });
+
+export const pendingGrants = sqliteTable('pending_grants', {
+  id: text('id').primaryKey(),
+  payload: text('payload').notNull(),
+  ownerId: text('owner_id'),
+  createdAt: integer('created_at').notNull(),
+});

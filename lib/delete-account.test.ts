@@ -7,6 +7,7 @@ import {
   accountDeletionDecision,
   DELETE_ACCOUNT_CONFIRMATION,
   deleteAccountRequestAllowed,
+  sameOriginRequestAllowed,
   REVOKE_UNCONFIRMED_ERROR,
 } from './delete-account.ts';
 
@@ -162,4 +163,32 @@ test('client credentials attempt revoke when only the token key is unusable, and
   assert.match(unconfigured, /revokeXSession/);
   assert.match(unconfigured, /\bforce,/);
   assert.match(unconfigured, /revokeSkipped: 'not_configured'/);
+});
+
+test('disconnect uses the same-origin check that delete uses', () => {
+  assert.equal(sameOriginRequestAllowed({
+    origin: 'https://app.example.invalid',
+    requestOrigin: 'https://app.example.invalid',
+    secFetchSite: null,
+  }), true);
+  assert.equal(sameOriginRequestAllowed({
+    origin: 'https://other.example.invalid',
+    requestOrigin: 'https://app.example.invalid',
+    secFetchSite: 'same-origin',
+  }), false);
+  assert.equal(sameOriginRequestAllowed({
+    origin: null,
+    requestOrigin: 'https://app.example.invalid',
+    secFetchSite: 'same-origin',
+  }), true);
+  assert.equal(sameOriginRequestAllowed({
+    origin: null,
+    requestOrigin: 'https://app.example.invalid',
+    secFetchSite: 'same-site',
+  }), false);
+  const disconnect = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../app/api/auth/x/disconnect/route.ts'), 'utf8');
+  assert.match(disconnect, /sameOriginRequestAllowed\(/);
+  assert.match(disconnect, /status: 403/);
+  const handler = disconnect.slice(disconnect.indexOf('export async function POST'));
+  assert.ok(handler.indexOf('sameOriginRequestAllowed') < handler.indexOf('disconnectPresentedSession'));
 });

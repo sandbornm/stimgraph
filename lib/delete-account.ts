@@ -55,14 +55,21 @@ export function configuredDeletionOwner(input: {
   return { ownerId: input.ownerIdFromRow };
 }
 
+export function sameOriginRequestAllowed(input: {
+  origin: string | null;
+  requestOrigin: string;
+  secFetchSite: string | null;
+}) {
+  return input.origin
+    ? input.origin === input.requestOrigin
+    : input.secFetchSite === 'same-origin';
+}
+
 export function deleteAccountRequestAllowed(input: {
   origin: string | null;
   requestOrigin: string;
   secFetchSite: string | null;
   confirm: unknown;
 }) {
-  const originAllowed = input.origin
-    ? input.origin === input.requestOrigin
-    : input.secFetchSite === 'same-origin';
-  return originAllowed && input.confirm === DELETE_ACCOUNT_CONFIRMATION;
+  return sameOriginRequestAllowed(input) && input.confirm === DELETE_ACCOUNT_CONFIRMATION;
 }

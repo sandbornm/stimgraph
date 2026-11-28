@@ -15,6 +15,13 @@ import {
 import { ownerDeleteStatements } from '@/lib/owner-tables';
 import type { XProfile } from '@/lib/x-session';
 import {
+  BOOKMARKS_REQUIRE_LIVE_OWNER_SQL,
+  INSERT_SESSION_IF_LIVE_SQL,
+  POLL_LIVE_SESSIONS_SQL,
+} from '@/lib/owner-live-sql';
+
+export { BOOKMARKS_REQUIRE_LIVE_OWNER_SQL, INSERT_SESSION_IF_LIVE_SQL, POLL_LIVE_SESSIONS_SQL };
+import {
   EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL,
   EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL,
   SCHEMA_EVENTS_CREATE_SQL,
@@ -207,6 +214,13 @@ export async function ensureSchema() {
     d1.prepare(SCHEMA_EVENTS_CREATE_SQL),
     d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL),
     d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL).bind(Date.now()),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS pending_grants (
+      id TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      owner_id TEXT,
+      created_at INTEGER NOT NULL
+    )`),
+    d1.prepare(BOOKMARKS_REQUIRE_LIVE_OWNER_SQL),
   ]);
   try {
     await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
@@ -242,12 +256,40 @@ export async function takeOauthPending(state: string): Promise<{ verifier: strin
   return { verifier: row.verifier, returnPath: row.return_path, createdAt: row.created_at };
 }
 
-export async function insertXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
+export async function insertXSessionRecord(
+  id: string,
+  ownerId: string,
+  payload: string,
+  expiresAt: number,
+  pendingCreatedAt: number,
+) {
   await ensureSchema();
   const now = Date.now();
+  const result = await getD1().prepare(INSERT_SESSION_IF_LIVE_SQL)
+    .bind(id, ownerId, payload, expiresAt, now, now, ownerId, pendingCreatedAt)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+}
+
+export async function recordPendingGrant(payload: string, ownerId?: string | null) {
+  await ensureSchema();
+  const id = crypto.randomUUID();
   await getD1().prepare(
-    'INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).bind(id, ownerId, payload, expiresAt, now, now).run();
+    'INSERT INTO pending_grants (id, payload, owner_id, created_at) VALUES (?, ?, ?, ?)',
+  ).bind(id, payload, ownerId ?? null, Date.now()).run();
+  return id;
+}
+
+export async function loadPendingGrants(): Promise<{ id: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT id, payload FROM pending_grants')
+    .all<{ id: string; payload: string }>();
+  return rows.results;
+}
+
+export async function deletePendingGrant(id: string) {
+  await ensureSchema();
+  await getD1().prepare('DELETE FROM pending_grants WHERE id = ?').bind(id).run();
 }
 
 export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
@@ -474,13 +516,22 @@ export async function storeBookmarks({
     batchEnds.push(statements.length);
   }
 
-  let batchStart = 0;
-  for (const end of batchEnds) {
-    if (end - batchStart < 80) continue;
-    await d1.batch(statements.slice(batchStart, end));
-    batchStart = end;
+  try {
+    let batchStart = 0;
+    for (const end of batchEnds) {
+      if (end - batchStart < 80) continue;
+      await d1.batch(statements.slice(batchStart, end));
+      batchStart = end;
+    }
+    if (batchStart < statements.length) {
+      await d1.batch(statements.slice(batchStart));
+    }
+  } catch (error) {
+    if (String(error).includes('stimgraph-owner-not-live')) {
+      return { stored: 0, inserted: 0, insertedIds: [] };
+    }
+    throw error;
   }
-  if (batchStart < statements.length) await d1.batch(statements.slice(batchStart));
   if (optimize) await d1.prepare('PRAGMA optimize').run();
   return { stored: bookmarks.length, inserted: insertedIds.length, insertedIds };
 }

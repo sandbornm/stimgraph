@@ -52,8 +52,8 @@ export async function revokeAndDeleteOwner<TSession extends RevocableSession>(in
         error: 'error' in decision ? decision.error : REVOKE_UNCONFIRMED_ERROR,
       };
     }
-    await input.deleteData(input.ownerId);
     await input.recordOwnerDeleted(input.ownerId, Date.now());
+    await input.deleteData(input.ownerId);
     return { deleted: true, revoked: decision.revoked };
   });
 }
@@ -106,8 +106,8 @@ export async function deleteUnconfiguredAccount<TSession extends RevocableSessio
     return { deleted: false, status: 401, error: 'Connect X first.' };
   }
   await input.withLock(decision.ownerId, async () => {
-    await input.deleteData(decision.ownerId);
     await input.recordOwnerDeleted(decision.ownerId, Date.now());
+    await input.deleteData(decision.ownerId);
   });
   return { deleted: true, revoked: false, revokeSkipped: decision.revokeSkipped };
 }

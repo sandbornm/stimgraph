@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteXSessionRecord, expireXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { deleteXSessionRecord, expireXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, recordPendingGrant, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { finishExchangedGrant } from '@/lib/callback-grant';
 import { storeCallbackSession } from '@/lib/callback-session';
 import { withOwnerWork } from '@/lib/owner-work';
 import { readStateCookie, sessionCookieSecure } from '@/lib/session-cookie';
@@ -72,37 +73,56 @@ export async function GET(request: NextRequest) {
   try {
     const redirectUri = requireRuntimeValue('X_REDIRECT_URI');
     const token = await exchangeAuthorizationCode({ code, verifier: pending.verifier, redirectUri });
-    const profile = await fetchXProfile(token.access_token);
-    const sessionId = randomBase64Url();
-    const payload = await sealXSession({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      expiresAt: Date.now() + token.expires_in * 1000,
-      profile,
-    });
-    const expiresAt = Date.now() + X_SESSION_TTL_MS;
-    const stored = await withOwnerWork(profile.id, () => storeCallbackSession({
-      ownerId: profile.id,
-      pendingCreatedAt: pending.createdAt,
+    let sessionId = '';
+    const outcome = await finishExchangedGrant({
       session: {
         accessToken: token.access_token,
         refreshToken: token.refresh_token,
       },
-      sessionId,
-      payload,
-      expiresAt,
-      ownerDeletedSince,
-      loadRows: loadOwnerXSessionRows,
-      openPayload: async (sealed) => (await openXSession(sealed))?.session ?? null,
-      insert: insertXSessionRecord,
-      deleteRow: deleteXSessionRecord,
-      expireRow: expireXSessionRecord,
+      finish: async () => {
+        const profile = await fetchXProfile(token.access_token);
+        sessionId = randomBase64Url();
+        const payload = await sealXSession({
+          accessToken: token.access_token,
+          refreshToken: token.refresh_token,
+          expiresAt: Date.now() + token.expires_in * 1000,
+          profile,
+        });
+        const expiresAt = Date.now() + X_SESSION_TTL_MS;
+        return withOwnerWork(profile.id, () => storeCallbackSession({
+          ownerId: profile.id,
+          pendingCreatedAt: pending.createdAt,
+          session: {
+            accessToken: token.access_token,
+            refreshToken: token.refresh_token,
+          },
+          sessionId,
+          payload,
+          expiresAt,
+          ownerDeletedSince,
+          loadRows: loadOwnerXSessionRows,
+          openPayload: async (sealed) => (await openXSession(sealed))?.session ?? null,
+          insert: insertXSessionRecord,
+          deleteRow: deleteXSessionRecord,
+          expireRow: expireXSessionRecord,
+          revoke: revokeXSession,
+        }));
+      },
       revoke: revokeXSession,
-    }));
-    if (stored === 'rejected') {
-      return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
+      recordPending: async (session) => {
+        const payload = await sealXSession({
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          expiresAt: Date.now() + token.expires_in * 1000,
+          profile: { id: 'pending', username: '', name: '' },
+        });
+        await recordPendingGrant(payload);
+      },
+    });
+    if (outcome === 'stored' && sessionId) {
+      return connectedPage(request, sessionId, returnPath);
     }
-    return connectedPage(request, sessionId, returnPath);
+    return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
   } catch {
     return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
   }

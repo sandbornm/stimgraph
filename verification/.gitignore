@@ -1,0 +1,11 @@
+.tlc/
+states/
+*.out
+MC.tla
+MC.cfg
+MC.java
+MC.class
+MC$*.class
+*_TTrace_*.tla
+*_TTrace_*.bin
+*.out

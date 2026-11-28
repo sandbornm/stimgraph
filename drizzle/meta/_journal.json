@@ -71,6 +71,20 @@
       "when": 1792400000000,
       "tag": "0009_expire_unprefixed_cutover",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1792500000000,
+      "tag": "0010_pending_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1792600000000,
+      "tag": "0011_bookmarks_live_owner",
+      "breakpoints": true
     }
   ]
 }

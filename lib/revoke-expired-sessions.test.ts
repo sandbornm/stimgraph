@@ -10,13 +10,17 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 test('import polling only selects unexpired rows, and revoke-expired deletes only after X confirms', async () => {
   const sync = readFileSync(join(root, 'lib/background-sync.ts'), 'utf8');
-  const importAt = sync.indexOf('SELECT id, owner_id FROM x_sessions');
+  const importAt = sync.indexOf('prepare(POLL_LIVE_SESSIONS_SQL)');
   const loopAt = sync.indexOf('for (const stored of sessions.results)');
-  const importSql = sync.slice(importAt, loopAt);
-  assert.match(importSql, /WHERE expires_at > \?/);
-  assert.doesNotMatch(importSql, /expires_at <=/);
+  assert.ok(importAt >= 0 && importAt < loopAt);
+  const pollSql = readFileSync(join(root, 'lib/owner-live-sql.ts'), 'utf8');
+  const poll = pollSql.slice(pollSql.indexOf('export const POLL_LIVE_SESSIONS_SQL'));
+  assert.match(poll, /WHERE expires_at > \?/);
+  assert.doesNotMatch(poll, /expires_at <=/);
+  assert.match(poll, /deleted_owners/);
   const revokeAt = sync.indexOf('revokeExpiredSessions(');
-  assert.ok(sync.indexOf('if (!tokenKeyUsable(') < revokeAt && revokeAt < importAt);
+  const pendingAt = sync.indexOf('revokePendingGrants(');
+  assert.ok(sync.indexOf('if (!tokenKeyUsable(') < revokeAt && revokeAt < pendingAt && pendingAt < importAt);
   assert.equal(sync.includes('iterateXBookmarks'), true);
   const helper = readFileSync(join(root, 'lib/revoke-expired-sessions.ts'), 'utf8');
   assert.equal(helper.includes('bookmark'), false);

@@ -1,11 +1,19 @@
 import { getD1 } from '@/db/index';
 import { labelPendingBookmarks } from '@/db/jev';
-import { deleteXSessionRecord, ensureSchema, loadExpiredXSessionRows, storeBookmarks } from '@/db/storage';
+import {
+  deletePendingGrant,
+  deleteXSessionRecord,
+  ensureSchema,
+  loadExpiredXSessionRows,
+  loadPendingGrants,
+  POLL_LIVE_SESSIONS_SQL,
+  storeBookmarks,
+} from '@/db/storage';
 import { getStoredXSessionLocked } from './x-auth-server';
 import { tokenKeyUsable } from './x-session-seal';
 import { iterateXBookmarks } from './x-bookmarks';
 import { getRuntimeValue } from './runtime-env';
-import { revokeExpiredSessions } from './revoke-expired-sessions';
+import { revokeExpiredSessions, revokePendingGrants } from './revoke-expired-sessions';
 import { XRequestError } from './x-errors';
 import { revokeXSession } from './x-api';
 import { openXSession } from './x-session';
@@ -20,16 +28,22 @@ export async function pollConnectedAccounts() {
   const now = Date.now();
   await d1.prepare(`INSERT INTO background_health(id, heartbeat_at) VALUES (1, ?)
     ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at`).bind(now).run();
+  const openPayload = async (payload: string) => (await openXSession(payload))?.session ?? null;
   await revokeExpiredSessions({
     now,
     loadExpired: loadExpiredXSessionRows,
     withLock: withOwnerWork,
-    openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
+    openPayload,
     revoke: revokeXSession,
     deleteRow: deleteXSessionRecord,
   });
-  const sessions = await d1.prepare(`SELECT id, owner_id FROM x_sessions
-    WHERE expires_at > ? ORDER BY updated_at DESC`).bind(now)
+  await revokePendingGrants({
+    loadPending: loadPendingGrants,
+    openPayload,
+    revoke: revokeXSession,
+    deleteRow: deletePendingGrant,
+  });
+  const sessions = await d1.prepare(POLL_LIVE_SESSIONS_SQL).bind(now)
     .all<{ id: string; owner_id: string }>();
   for (const stored of sessions.results) {
     await withOwnerWork(stored.owner_id, async () => {

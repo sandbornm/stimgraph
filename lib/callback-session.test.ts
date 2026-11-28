@@ -131,6 +131,7 @@ test('a callback write either lands before delete loads payloads or after delete
       openPayload: async (payload) => ({ accessToken: payload, refreshToken: payload }),
       insert: async () => {
         after.set('x_sessions', ['refresh-new']);
+        return true;
       },
       deleteRow: async () => {
         throw new Error('deleted');
@@ -162,21 +163,25 @@ test('a callback write either lands before delete loads payloads or after delete
 
   const callbackSource = readFileSync(join(root, 'app/api/auth/x/callback/route.ts'), 'utf8');
   const exchangeAt = callbackSource.indexOf('exchangeAuthorizationCode(');
+  const finishAt = callbackSource.indexOf('finishExchangedGrant(');
   const profileAt = callbackSource.indexOf('fetchXProfile(');
   const sealAt = callbackSource.indexOf('sealXSession(');
   const lockAt = callbackSource.indexOf('withOwnerWork(');
   const insertAt = callbackSource.indexOf('insertXSessionRecord', lockAt);
-  assert.ok(exchangeAt >= 0 && exchangeAt < profileAt && profileAt < sealAt && sealAt < lockAt && lockAt < insertAt);
-  const locked = callbackSource.slice(lockAt, callbackSource.indexOf('return connectedPage'));
-  assert.match(locked, /storeCallbackSession\(/);
-  assert.match(locked, /loadOwnerXSessionRows/);
-  assert.match(locked, /insertXSessionRecord/);
-  assert.match(locked, /deleteXSessionRecord/);
-  assert.match(locked, /expireXSessionRecord/);
-  assert.equal(locked.includes('replaceXSessionRecord'), false);
-  assert.equal(locked.includes('loadOwnerXSessionPayloads'), false);
-  assert.match(locked, /ownerDeletedSince/);
-  assert.match(locked, /auth=failed|homeRedirect\(request, 'failed'/);
+  assert.ok(exchangeAt >= 0 && exchangeAt < finishAt && finishAt < profileAt && profileAt < sealAt && sealAt < lockAt && lockAt < insertAt);
+  const finish = callbackSource.slice(finishAt, callbackSource.indexOf("if (outcome === 'stored'"));
+  assert.match(finish, /storeCallbackSession\(/);
+  assert.match(finish, /loadOwnerXSessionRows/);
+  assert.match(finish, /insertXSessionRecord/);
+  assert.match(finish, /deleteXSessionRecord/);
+  assert.match(finish, /expireXSessionRecord/);
+  assert.match(finish, /recordPendingGrant/);
+  assert.equal(finish.includes('replaceXSessionRecord'), false);
+  assert.equal(finish.includes('loadOwnerXSessionPayloads'), false);
+  assert.match(finish, /ownerDeletedSince/);
+  assert.equal(finish.includes('exchangeAuthorizationCode'), false);
+  assert.match(callbackSource, /auth=failed|homeRedirect\(request, 'failed'/);
+  const locked = callbackSource.slice(lockAt, callbackSource.indexOf('revoke: revokeXSession'));
   assert.equal(locked.includes('exchangeAuthorizationCode'), false);
   assert.equal(locked.includes('fetchXProfile'), false);
   assert.equal(locked.includes('sealXSession'), false);
@@ -184,19 +189,22 @@ test('a callback write either lands before delete loads payloads or after delete
   const section = revokeSource.indexOf('return input.withLock(');
   const loadAt = revokeSource.indexOf('input.loadPayloads(');
   const revokeAt = revokeSource.indexOf('input.revoke(');
+  const recordAt = revokeSource.indexOf('input.recordOwnerDeleted(');
   const deleteAt = revokeSource.indexOf('input.deleteData(');
-  const recordAt = revokeSource.indexOf('recordOwnerDeleted(');
-  assert.ok(section >= 0 && section < loadAt && loadAt < revokeAt && revokeAt < deleteAt && deleteAt < recordAt);
+  assert.ok(section >= 0 && section < loadAt && loadAt < revokeAt && revokeAt < recordAt && recordAt < deleteAt);
   const unconfiguredDelete = revokeSource.slice(revokeSource.indexOf('export async function deleteUnconfiguredAccount'));
+  const unconfiguredRecordAt = unconfiguredDelete.indexOf('input.recordOwnerDeleted(');
   const unconfiguredDeleteAt = unconfiguredDelete.indexOf('input.deleteData(');
-  const unconfiguredRecordAt = unconfiguredDelete.indexOf('recordOwnerDeleted(');
-  assert.ok(unconfiguredDeleteAt >= 0 && unconfiguredDeleteAt < unconfiguredRecordAt);
+  assert.ok(unconfiguredRecordAt >= 0 && unconfiguredRecordAt < unconfiguredDeleteAt);
   const storage = readFileSync(join(root, 'db/storage.ts'), 'utf8');
   const take = storage.slice(storage.indexOf('export async function takeOauthPending'), storage.indexOf('export async function insertXSessionRecord'));
   assert.match(take, /createdAt: row\.created_at/);
   assert.equal(storage.includes('replaceXSessionRecord'), false);
-  const insertBody = storage.slice(storage.indexOf('export async function insertXSessionRecord'), storage.indexOf('export async function saveXSessionRecord'));
-  assert.match(insertBody, /INSERT INTO x_sessions/);
+  const insertBody = storage.slice(storage.indexOf('export async function insertXSessionRecord'), storage.indexOf('export async function recordPendingGrant'));
+  assert.match(insertBody, /INSERT_SESSION_IF_LIVE_SQL/);
+  const liveSql = readFileSync(join(root, 'lib/owner-live-sql.ts'), 'utf8');
+  assert.match(liveSql, /INSERT INTO x_sessions/);
+  assert.match(liveSql, /deleted_at >= \?/);
   assert.doesNotMatch(insertBody, /DELETE/);
   const loadRowsBody = storage.slice(storage.indexOf('export async function loadOwnerXSessionRows'), storage.indexOf('export async function ownerHasSession'));
   assert.match(loadRowsBody, /SELECT id, payload FROM x_sessions WHERE owner_id = \?/);
@@ -236,6 +244,7 @@ test('a sign-in started after the delete is stored normally', async () => {
     openPayload: async () => null,
     insert: async (_id, _owner, payload) => {
       rows.push(payload);
+      return true;
     },
     deleteRow: async () => {
       throw new Error('deleted');
@@ -316,6 +325,7 @@ test('an unconfigured delete blocks a sign-in that started earlier', async () =>
     openPayload: async () => null,
     insert: async (_id, _owner, payload) => {
       rows.push(payload);
+      return true;
     },
     deleteRow: async () => {
       throw new Error('deleted');
@@ -380,6 +390,7 @@ test('a previous row is removed only after X confirms revocation', async () => {
       ]);
       rows.push({ id, payload, expiresAt });
       stored = true;
+      return true;
     },
     deleteRow: async (id) => {
       assert.equal(stored, true);
@@ -411,4 +422,31 @@ test('a previous row is removed only after X confirms revocation', async () => {
     { id: 'row-unopenable', payload: 'sealed-unopenable', expiresAt: 0 },
     { id: 'sid-new', payload: 'sealed-new', expiresAt: 50 },
   ]);
+});
+
+test('a session insert that is rejected by the delete tombstone stores nothing', async () => {
+  const expired: string[] = [];
+  const outcome = await storeCallbackSession({
+    ownerId: 'owner-tombstone-insert',
+    pendingCreatedAt: 10,
+    session: { accessToken: 'access-new', refreshToken: 'refresh-new' },
+    sessionId: 'sid-new',
+    payload: 'sealed-new',
+    expiresAt: 50,
+    ownerDeletedSince: () => false,
+    loadRows: async () => [{ id: 'row-old', payload: 'sealed-old' }],
+    openPayload: async () => ({ accessToken: 'access-old', refreshToken: 'refresh-old' }),
+    insert: async () => false,
+    deleteRow: async () => {
+      throw new Error('deleted');
+    },
+    expireRow: async (id) => {
+      expired.push(id);
+    },
+    revoke: async () => {
+      throw new Error('revoked');
+    },
+  });
+  assert.equal(outcome, 'rejected');
+  assert.deepEqual(expired, []);
 });

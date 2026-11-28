@@ -108,6 +108,7 @@ test('a callback pending from before the delete is rejected from the stored tomb
     },
     insert: async () => {
       inserted = true;
+      return true;
     },
     deleteRow: async () => {
       throw new Error('deleted');
@@ -135,6 +136,7 @@ test('a callback pending from before the delete is rejected from the stored tomb
     openPayload: async () => null,
     insert: async () => {
       inserted = true;
+      return true;
     },
     deleteRow: async () => {
       throw new Error('deleted');
@@ -175,6 +177,6 @@ test('deleted owners are stored in D1 and kept out of account deletion', () => {
   const route = readFileSync(join(root, 'app/api/data/route.ts'), 'utf8');
   assert.equal(route.split('recordOwnerDeleted,').length - 1, 2);
   const revoke = readFileSync(join(root, 'lib/owner-revoke-delete.ts'), 'utf8');
-  assert.match(revoke, /await input\.deleteData\(input\.ownerId\);\s*await input\.recordOwnerDeleted\(input\.ownerId, Date\.now\(\)\)/);
-  assert.match(revoke, /await input\.deleteData\(decision\.ownerId\);\s*await input\.recordOwnerDeleted\(decision\.ownerId, Date\.now\(\)\)/);
+  assert.match(revoke, /await input\.recordOwnerDeleted\(input\.ownerId, Date\.now\(\)\);\s*await input\.deleteData\(input\.ownerId\)/);
+  assert.match(revoke, /await input\.recordOwnerDeleted\(decision\.ownerId, Date\.now\(\)\);\s*await input\.deleteData\(decision\.ownerId\)/);
 });

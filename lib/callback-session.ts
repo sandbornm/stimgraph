@@ -18,7 +18,7 @@ export async function storeCallbackSession(input: {
   ownerDeletedSince: (ownerId: string, since: number) => boolean | Promise<boolean>;
   loadRows: (ownerId: string) => Promise<{ id: string; payload: string }[]>;
   openPayload: (payload: string) => Promise<CallbackToken | null>;
-  insert: (id: string, ownerId: string, payload: string, expiresAt: number) => Promise<unknown>;
+  insert: (id: string, ownerId: string, payload: string, expiresAt: number, pendingCreatedAt: number) => Promise<boolean>;
   deleteRow: (id: string) => Promise<unknown>;
   expireRow: (id: string) => Promise<unknown>;
   revoke: (session: CallbackToken) => Promise<boolean>;
@@ -32,7 +32,14 @@ export async function storeCallbackSession(input: {
     return 'rejected';
   }
   const previousRows = await input.loadRows(input.ownerId);
-  await input.insert(input.sessionId, input.ownerId, input.payload, input.expiresAt);
+  const inserted = await input.insert(
+    input.sessionId,
+    input.ownerId,
+    input.payload,
+    input.expiresAt,
+    input.pendingCreatedAt,
+  );
+  if (!inserted) return 'rejected';
   for (const row of previousRows) {
     let previous: CallbackToken | null;
     try {

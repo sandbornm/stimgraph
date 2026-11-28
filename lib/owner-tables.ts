@@ -40,6 +40,10 @@ export const NON_OWNER_TABLES = [
     table: 'schema_events',
     reason: 'One-time schema flags, not an owner account.',
   },
+  {
+    table: 'pending_grants',
+    reason: 'Sealed tokens awaiting revoke or session store; kept so a failed callback can retry revocation.',
+  },
 ] as const;
 
 function ident(value: string) {
