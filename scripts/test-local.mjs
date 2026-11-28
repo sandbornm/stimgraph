@@ -38,7 +38,7 @@ async function waitFor(check) {
 async function start() {
   child = spawn(process.execPath, ['--import', resolve('scripts/fixtures/mock-x.mjs'), 'node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', '3012'], {
     env: { PATH: process.env.PATH, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1',
-      X_CLIENT_ID: 'stimgraph-local-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret', XAI_API_KEY: '', TYPESAFE_API_KEY: 'inert-typesafe-test',
+      X_CLIENT_ID: 'stimgraph-local-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret', STIMGRAPH_TOKEN_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', XAI_API_KEY: '', TYPESAFE_API_KEY: 'inert-typesafe-test',
       X_REDIRECT_URI: `${origin}/api/auth/x/callback`, STIMGRAPH_TAILNET: 'true',
       STIMGRAPH_TAILNET_LOGIN: 'owner@example.invalid', STIMGRAPH_PUBLIC_ORIGIN: origin,
       STIMGRAPH_DATABASE: path, STIMGRAPH_BACKGROUND_POLL: 'true', STIMGRAPH_CREDENTIAL_SOURCE: 'none', STIMGRAPH_TEST_SCENARIO: scenario },
@@ -96,9 +96,20 @@ try {
   await waitFor(() => db.prepare('SELECT backfill_completed_at AS t FROM bookmark_sync_state').get()?.t > 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
   assert.match(output, /bookmark backfill completed: 125 fetched in 2 X calls/);
-  const cookie = { Cookie: 'stim_x_session=fixture-session', Origin: origin };
-  assert.equal((await request('/api/data', { ...cookie, Origin: 'https://untrusted.invalid' }, { method: 'DELETE' })).status, 403);
-  assert.equal((await request('/api/data', cookie, { method: 'DELETE' })).status, 200);
+  const cookie = { Cookie: '__Host-stim_x_session=fixture-session', Origin: origin };
+  const deleteAccount = { method: 'DELETE', body: JSON.stringify({ confirm: 'delete my account' }) };
+  assert.equal((await request('/api/data', { ...cookie, Origin: 'https://untrusted.invalid', 'Content-Type': 'application/json' }, deleteAccount)).status, 403);
+  writeFileSync(scenario, JSON.stringify({ count: 125, revokeFailure: 503 }));
+  const refused = await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount);
+  assert.equal(refused.status, 502);
+  assert.equal((await refused.json()).retryable, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM x_sessions').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bookmarks').get().n, 125);
+  writeFileSync(scenario, JSON.stringify({ count: 125 }));
+  db.prepare('UPDATE x_sessions SET expires_at = 1').run();
+  const deleted = await request('/api/data', { ...cookie, 'Content-Type': 'application/json' }, deleteAccount);
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(await deleted.json(), { deleted: true, revoked: true });
   for (const table of ['bookmarks', 'bookmark_observations', 'bookmark_sync_state', 'x_sessions', 'accounts']) {
     assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
   }

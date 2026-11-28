@@ -6,7 +6,26 @@ import { parseCapsule, type GraphCapsule } from '@/lib/capsule';
 import type { FeedProbe } from '@/lib/rss-probe';
 import { hostFromUrl, urlsFromBookmark } from '@/lib/rss-probe';
 import type { StoredFollow } from '@/lib/x-following';
+import {
+  ownerDeletedSince as deletedSince,
+  ownerIsLive as liveOwner,
+  recordOwnerDeleted as writeOwnerDeleted,
+  type OwnerDeletionDb,
+} from '@/lib/owner-deletions';
+import { ownerDeleteStatements } from '@/lib/owner-tables';
 import type { XProfile } from '@/lib/x-session';
+import {
+  BOOKMARKS_REQUIRE_LIVE_OWNER_SQL,
+  INSERT_SESSION_IF_LIVE_SQL,
+  POLL_LIVE_SESSIONS_SQL,
+} from '@/lib/owner-live-sql';
+
+export { BOOKMARKS_REQUIRE_LIVE_OWNER_SQL, INSERT_SESSION_IF_LIVE_SQL, POLL_LIVE_SESSIONS_SQL };
+import {
+  EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL,
+  EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL,
+  SCHEMA_EVENTS_CREATE_SQL,
+} from './schema';
 
 export type StoredBookmark = {
   postId: string;
@@ -177,8 +196,14 @@ export async function ensureSchema() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`),
-    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author ON bookmarks(owner_id, author_id)'),
-    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_created ON bookmarks(owner_id, created_at)'),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS deleted_owners (
+      owner_id TEXT PRIMARY KEY NOT NULL,
+      deleted_at INTEGER NOT NULL
+    )`),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_recent ON bookmarks(owner_id, created_at DESC, synced_at DESC)'),
+    d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmarks_owner_author_profile ON bookmarks(owner_id, author_id, author_username, author_name, author_profile_image_url)'),
+    d1.prepare('DROP INDEX IF EXISTS idx_bookmarks_owner_created'),
+    d1.prepare('DROP INDEX IF EXISTS idx_bookmarks_owner_author'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_topics_owner_label ON topics(owner_id, label)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_bookmark_topics_owner_topic ON bookmark_topics(owner_id, topic_id)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_scouts_owner_scouted ON scouts(owner_id, scouted_at)'),
@@ -186,6 +211,16 @@ export async function ensureSchema() {
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_feeds_owner_status ON feeds(owner_id, status)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_x_sessions_owner ON x_sessions(owner_id)'),
+    d1.prepare(SCHEMA_EVENTS_CREATE_SQL),
+    d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL),
+    d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL).bind(Date.now()),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS pending_grants (
+      id TEXT PRIMARY KEY NOT NULL,
+      payload TEXT NOT NULL,
+      owner_id TEXT,
+      created_at INTEGER NOT NULL
+    )`),
+    d1.prepare(BOOKMARKS_REQUIRE_LIVE_OWNER_SQL),
   ]);
   try {
     await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
@@ -210,7 +245,7 @@ export async function saveOauthPending(state: string, verifier: string, returnPa
   ]);
 }
 
-export async function takeOauthPending(state: string): Promise<{ verifier: string; returnPath: string | null } | null> {
+export async function takeOauthPending(state: string): Promise<{ verifier: string; returnPath: string | null; createdAt: number } | null> {
   await ensureSchema();
   const d1 = getD1();
   const row = await d1.prepare(
@@ -218,19 +253,43 @@ export async function takeOauthPending(state: string): Promise<{ verifier: strin
   ).bind(state).first<{ verifier: string; return_path: string | null; created_at: number }>();
   await d1.prepare('DELETE FROM oauth_pending WHERE state = ?').bind(state).run();
   if (!row || row.created_at < Date.now() - OAUTH_PENDING_TTL_MS) return null;
-  return { verifier: row.verifier, returnPath: row.return_path };
+  return { verifier: row.verifier, returnPath: row.return_path, createdAt: row.created_at };
 }
 
-export async function replaceXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
+export async function insertXSessionRecord(
+  id: string,
+  ownerId: string,
+  payload: string,
+  expiresAt: number,
+  pendingCreatedAt: number,
+) {
   await ensureSchema();
-  const d1 = getD1();
   const now = Date.now();
-  await d1.batch([
-    d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
-    d1.prepare(
-      'INSERT INTO x_sessions (id, owner_id, payload, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).bind(id, ownerId, payload, expiresAt, now, now),
-  ]);
+  const result = await getD1().prepare(INSERT_SESSION_IF_LIVE_SQL)
+    .bind(id, ownerId, payload, expiresAt, now, now, ownerId, pendingCreatedAt)
+    .run();
+  return (result.meta?.changes ?? 0) > 0;
+}
+
+export async function recordPendingGrant(payload: string, ownerId?: string | null) {
+  await ensureSchema();
+  const id = crypto.randomUUID();
+  await getD1().prepare(
+    'INSERT INTO pending_grants (id, payload, owner_id, created_at) VALUES (?, ?, ?, ?)',
+  ).bind(id, payload, ownerId ?? null, Date.now()).run();
+  return id;
+}
+
+export async function loadPendingGrants(): Promise<{ id: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT id, payload FROM pending_grants')
+    .all<{ id: string; payload: string }>();
+  return rows.results;
+}
+
+export async function deletePendingGrant(id: string) {
+  await ensureSchema();
+  await getD1().prepare('DELETE FROM pending_grants WHERE id = ?').bind(id).run();
 }
 
 export async function saveXSessionRecord(id: string, ownerId: string, payload: string, expiresAt: number) {
@@ -240,22 +299,115 @@ export async function saveXSessionRecord(id: string, ownerId: string, payload: s
     WHERE id = ? AND owner_id = ?`).bind(payload, expiresAt, now, id, ownerId).run();
 }
 
+export async function resealXSessionRecord(id: string, ownerId: string, expectedPayload: string, payload: string) {
+  await ensureSchema();
+  await getD1().prepare(`UPDATE x_sessions SET payload = ?, updated_at = ?
+    WHERE id = ? AND owner_id = ? AND payload = ?`).bind(payload, Date.now(), id, ownerId, expectedPayload).run();
+}
+
+export async function loadXSessionOwnerId(id: string): Promise<string | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT owner_id FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ owner_id: string }>();
+  return row?.owner_id ?? null;
+}
+
+export async function loadXSessionPayload(id: string): Promise<{ ownerId: string; payload: string } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT payload, owner_id FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ payload: string; owner_id: string }>();
+  if (!row) return null;
+  return { ownerId: row.owner_id, payload: row.payload };
+}
+
 export async function loadXSessionRecord(id: string): Promise<{ payload: string; ownerId: string; expiresAt: number } | null> {
   await ensureSchema();
   const row = await getD1().prepare(
     'SELECT payload, owner_id, expires_at FROM x_sessions WHERE id = ?',
   ).bind(id).first<{ payload: string; owner_id: string; expires_at: number }>();
   if (!row) return null;
-  if (row.expires_at < Date.now()) {
-    await deleteXSessionRecord(id);
-    return null;
-  }
+  if (row.expires_at < Date.now()) return null;
   return { payload: row.payload, ownerId: row.owner_id, expiresAt: row.expires_at };
+}
+
+export async function loadXSessionPayloadState(id: string): Promise<{ payload: string; expiresAt: number } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT payload, expires_at FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ payload: string; expires_at: number }>();
+  if (!row) return null;
+  return { payload: row.payload, expiresAt: row.expires_at };
 }
 
 export async function deleteXSessionRecord(id: string) {
   await ensureSchema();
   await getD1().prepare('DELETE FROM x_sessions WHERE id = ?').bind(id).run();
+}
+
+export async function expireXSessionRecord(id: string) {
+  await ensureSchema();
+  await getD1().prepare('UPDATE x_sessions SET expires_at = ? WHERE id = ?').bind(Date.now() - 1, id).run();
+}
+
+export async function loadOwnerXSessionPayloads(ownerId: string): Promise<string[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT payload FROM x_sessions WHERE owner_id = ?')
+    .bind(ownerId)
+    .all<{ payload: string }>();
+  return rows.results.map((row) => row.payload);
+}
+
+export async function loadOwnerXSessionRows(ownerId: string): Promise<{ id: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare('SELECT id, payload FROM x_sessions WHERE owner_id = ?')
+    .bind(ownerId)
+    .all<{ id: string; payload: string }>();
+  return rows.results.map((row) => ({ id: row.id, payload: row.payload }));
+}
+
+export async function ownerHasSession(ownerId: string): Promise<boolean> {
+  await ensureSchema();
+  const row = await getD1().prepare('SELECT id FROM x_sessions WHERE owner_id = ? LIMIT 1')
+    .bind(ownerId)
+    .first<{ id: string }>();
+  return Boolean(row);
+}
+
+export async function loadExpiredXSessionRows(now: number): Promise<{ id: string; ownerId: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare(
+    `SELECT id, owner_id, payload FROM x_sessions WHERE expires_at <= ? AND payload != ''`,
+  ).bind(now).all<{ id: string; owner_id: string; payload: string }>();
+  return rows.results.map((row) => ({ id: row.id, ownerId: row.owner_id, payload: row.payload }));
+}
+
+function ownerDeletionDb(): OwnerDeletionDb {
+  const d1 = getD1();
+  return {
+    async run(sql, params) {
+      await d1.prepare(sql).bind(...params).run();
+    },
+    async first<T extends Record<string, unknown>>(sql: string, params: (string | number)[]) {
+      return d1.prepare(sql).bind(...params).first<T>();
+    },
+  };
+}
+
+export async function recordOwnerDeleted(ownerId: string, at: number) {
+  await ensureSchema();
+  await writeOwnerDeleted(ownerDeletionDb(), ownerId, at);
+}
+
+export async function ownerDeletedSince(ownerId: string, since: number) {
+  await ensureSchema();
+  return deletedSince(ownerDeletionDb(), ownerId, since);
+}
+
+export async function ownerIsLive(ownerId: string) {
+  await ensureSchema();
+  return liveOwner(ownerDeletionDb(), ownerId);
 }
 
 function topicId(label: string) {
@@ -364,13 +516,22 @@ export async function storeBookmarks({
     batchEnds.push(statements.length);
   }
 
-  let batchStart = 0;
-  for (const end of batchEnds) {
-    if (end - batchStart < 80) continue;
-    await d1.batch(statements.slice(batchStart, end));
-    batchStart = end;
+  try {
+    let batchStart = 0;
+    for (const end of batchEnds) {
+      if (end - batchStart < 80) continue;
+      await d1.batch(statements.slice(batchStart, end));
+      batchStart = end;
+    }
+    if (batchStart < statements.length) {
+      await d1.batch(statements.slice(batchStart));
+    }
+  } catch (error) {
+    if (String(error).includes('stimgraph-owner-not-live')) {
+      return { stored: 0, inserted: 0, insertedIds: [] };
+    }
+    throw error;
   }
-  if (batchStart < statements.length) await d1.batch(statements.slice(batchStart));
   if (optimize) await d1.prepare('PRAGMA optimize').run();
   return { stored: bookmarks.length, inserted: insertedIds.length, insertedIds };
 }
@@ -796,30 +957,14 @@ export async function loadFeeds(ownerId: string): Promise<FeedProbe[]> {
   });
 }
 
+export async function deleteOwnerDataUnlocked(ownerId: string) {
+  await ensureSchema();
+  const d1 = getD1();
+  await d1.batch(ownerDeleteStatements().map((sql) => d1.prepare(sql).bind(ownerId)));
+}
+
 export async function deleteOwnerData(ownerId: string) {
-  return withOwnerWork(ownerId, async () => {
-    await ensureSchema();
-    const d1 = getD1();
-    await d1.batch([
-      d1.prepare('DELETE FROM bookmark_observations WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmark_sync_state WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmark_topics WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM jev_labels WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM jev_topic_config WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM topics WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bookmarks WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM scouts WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM follows WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM feeds WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM shares WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM trajectories WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM bridge_requests WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM research_cards WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM research_requests WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM x_sessions WHERE owner_id = ?').bind(ownerId),
-      d1.prepare('DELETE FROM accounts WHERE id = ?').bind(ownerId),
-    ]);
-  });
+  return withOwnerWork(ownerId, () => deleteOwnerDataUnlocked(ownerId));
 }
 
 export async function saveShare(id: string, ownerId: string, capsule: GraphCapsule) {
@@ -827,6 +972,11 @@ export async function saveShare(id: string, ownerId: string, capsule: GraphCapsu
   await getD1().prepare(
     'INSERT INTO shares (id, owner_id, name, capsule_json, created_at) VALUES (?, ?, ?, ?, ?)',
   ).bind(id, ownerId, capsule.name, JSON.stringify(capsule), Date.now()).run();
+}
+
+export async function saveDemoShare(id: string, ownerId: string, capsule: GraphCapsule) {
+  if (!ownerId.startsWith('demo:')) throw new Error('Demo share owner required.');
+  await saveShare(id, ownerId, capsule);
 }
 
 export async function countSharesSince(ownerId: string, since: number) {

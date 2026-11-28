@@ -85,8 +85,8 @@
     "scroll": "Zoom."
   },
   "live_behavior": {
-    "connect": "OAuth read-only: bookmark.read, follows.read, tweet.read, users.read, offline.access. No write scopes.",
-    "sync": "Pulls up to 600 bookmarks plus following. Streams pages as X returns them.",
+    "connect": "OAuth read-only: bookmark.read, tweet.read, users.read, offline.access. No write scopes.",
+    "sync": "Pulls up to 600 bookmarks. Streams pages as X returns them.",
     "poll": "Visible live tab polls the newest 15 bookmarks every 90 seconds. X has no bookmark webhook here.",
     "enrich": "Optional. Sends the next 40 bookmark texts and author handles to xAI. Never sends the X token. store: false.",
     "scout": "Optional. Searches X with x_search using top topics, frequent authors, and followed accounts. Optional 12-minute repeat while the tab stays open.",

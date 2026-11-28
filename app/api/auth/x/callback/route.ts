@@ -1,11 +1,16 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { replaceXSessionRecord, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
-import { sessionCookieOptions } from '@/lib/x-auth-server';
+import { deleteXSessionRecord, expireXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, recordPendingGrant, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { finishExchangedGrant } from '@/lib/callback-grant';
+import { storeCallbackSession } from '@/lib/callback-session';
+import { withOwnerWork } from '@/lib/owner-work';
+import { readStateCookie, sessionCookieSecure } from '@/lib/session-cookie';
+import { clearOauthStateCookie, withRenewedSession } from '@/lib/x-auth-server';
 import { requestOrigin } from '@/lib/request-origin';
-import { requireRuntimeValue } from '@/lib/runtime-env';
-import { exchangeAuthorizationCode, fetchXProfile } from '@/lib/x-api';
-import { randomBase64Url, sealXSession, X_SESSION_COOKIE, X_STATE_COOKIE } from '@/lib/x-session';
+import { getRuntimeValue, requireRuntimeValue } from '@/lib/runtime-env';
+import { xAuthConfigured } from '@/lib/x-auth-config';
+import { exchangeAuthorizationCode, fetchXProfile, revokeXSession } from '@/lib/x-api';
+import { openXSession, randomBase64Url, sealXSession } from '@/lib/x-session';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,39 +49,81 @@ function connectedPage(request: NextRequest, sessionId: string, returnPath: stri
       'cache-control': 'no-store',
     },
   });
-  response.cookies.set(X_SESSION_COOKIE, sessionId, sessionCookieOptions(request));
-  response.cookies.set(X_STATE_COOKIE, '', { ...sessionCookieOptions(request), maxAge: 0 });
-  return response;
+  withRenewedSession(response, request, sessionId);
+  return clearOauthStateCookie(response, request);
 }
 
 export async function GET(request: NextRequest) {
+  if (!xAuthConfigured(getRuntimeValue)) {
+    return clearOauthStateCookie(NextResponse.json(
+      { error: 'The X connection is not configured on the server.' },
+      { status: 503, headers: { 'cache-control': 'no-store' } },
+    ), request);
+  }
   const code = request.nextUrl.searchParams.get('code');
   const returnedState = request.nextUrl.searchParams.get('state');
-  const browserState = request.cookies.get(X_STATE_COOKIE)?.value;
+  const browserState = readStateCookie(request.cookies, sessionCookieSecure(requestOrigin(request)));
   const pending = returnedState && browserState === returnedState ? await takeOauthPending(returnedState) : null;
-  const verifier = pending?.verifier;
   const returnPath = pending?.returnPath ?? null;
 
-  if (!code || !returnedState || !verifier) {
-    return NextResponse.redirect(homeRedirect(request, 'invalid', returnPath));
+  if (!code || !returnedState || !pending || !pending.verifier) {
+    return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'invalid', returnPath)), request);
   }
 
   try {
     const redirectUri = requireRuntimeValue('X_REDIRECT_URI');
-    const token = await exchangeAuthorizationCode({ code, verifier, redirectUri });
-    const profile = await fetchXProfile(token.access_token);
-    const sessionId = randomBase64Url();
-    const payload = await sealXSession({
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      expiresAt: Date.now() + token.expires_in * 1000,
-      profile,
+    const token = await exchangeAuthorizationCode({ code, verifier: pending.verifier, redirectUri });
+    let sessionId = '';
+    const outcome = await finishExchangedGrant({
+      session: {
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+      },
+      finish: async () => {
+        const profile = await fetchXProfile(token.access_token);
+        sessionId = randomBase64Url();
+        const payload = await sealXSession({
+          accessToken: token.access_token,
+          refreshToken: token.refresh_token,
+          expiresAt: Date.now() + token.expires_in * 1000,
+          profile,
+        });
+        const expiresAt = Date.now() + X_SESSION_TTL_MS;
+        return withOwnerWork(profile.id, () => storeCallbackSession({
+          ownerId: profile.id,
+          pendingCreatedAt: pending.createdAt,
+          session: {
+            accessToken: token.access_token,
+            refreshToken: token.refresh_token,
+          },
+          sessionId,
+          payload,
+          expiresAt,
+          ownerDeletedSince,
+          loadRows: loadOwnerXSessionRows,
+          openPayload: async (sealed) => (await openXSession(sealed))?.session ?? null,
+          insert: insertXSessionRecord,
+          deleteRow: deleteXSessionRecord,
+          expireRow: expireXSessionRecord,
+          revoke: revokeXSession,
+        }));
+      },
+      revoke: revokeXSession,
+      recordPending: async (session) => {
+        const payload = await sealXSession({
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          expiresAt: Date.now() + token.expires_in * 1000,
+          profile: { id: 'pending', username: '', name: '' },
+        });
+        await recordPendingGrant(payload);
+      },
     });
-    await replaceXSessionRecord(sessionId, profile.id, payload, Date.now() + X_SESSION_TTL_MS);
-    return connectedPage(request, sessionId, returnPath);
+    if (outcome === 'stored' && sessionId) {
+      return connectedPage(request, sessionId, returnPath);
+    }
+    return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
   } catch {
-    const response = NextResponse.redirect(homeRedirect(request, 'failed', returnPath));
-    response.cookies.set(X_STATE_COOKIE, '', { ...sessionCookieOptions(request), maxAge: 0 });
-    return response;
+    return clearOauthStateCookie(NextResponse.redirect(homeRedirect(request, 'failed', returnPath)), request);
   }
 }

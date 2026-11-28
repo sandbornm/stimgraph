@@ -14,6 +14,14 @@ test('a poll re-reads the session after taking the owner lock so a completed del
   const insertAt = body.indexOf('INSERT OR IGNORE INTO bookmark_sync_state');
   assert.ok(selectAt >= 0, 'session re-read is missing');
   assert.ok(insertAt > selectAt, 'session re-read must happen before sync work');
+  assert.match(body, /getStoredXSessionLocked\(/);
+  assert.equal(body.includes('getStoredXSession('), false);
+});
+
+test('an unusable token key returns before any session row is touched', () => {
+  const gate = source.indexOf('if (!tokenKeyUsable(');
+  const sessions = source.indexOf('x_sessions');
+  assert.ok(gate >= 0 && sessions > gate);
 });
 
 test('an HTTP 400 from X drops the pagination cursor so the next attempt starts at the head', () => {

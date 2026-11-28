@@ -16,6 +16,7 @@ env:
   NEXT_TELEMETRY_DISABLED: '1'
   X_CLIENT_ID: stimgraph-inert-test
   X_CLIENT_SECRET: stimgraph-inert-test-secret
+  STIMGRAPH_TOKEN_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
   X_REDIRECT_URI: http://127.0.0.1:3012/api/auth/x/callback
   XAI_API_KEY: ''
   STIMGRAPH_BACKGROUND_POLL: 'false'

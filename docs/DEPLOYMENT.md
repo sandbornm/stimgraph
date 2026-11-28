@@ -18,9 +18,9 @@ Remote requests must have the configured Tailscale login. Serve supplies and san
 
 The scheduler wakes every minute to check whether work is due and polls X approximately every **six hours** (four scheduled polls per day). The first poll starts after connecting. It reads 20 bookmarks per page, at most five pages per account per poll, stops when it overlaps previously imported material, and persists continuation state for catch-up after restarts. On the first poll after upgrading, a **one-time backfill** instead pages 100 at a time through X's newest ~800 bookmarks without stopping at overlap, then records `bookmark_sync_state.backfill_completed_at` so it never reruns. Failures back off to 12 then 24 hours, respecting longer X retry/reset headers. A durable lease prevents overlapping polling. Browser and scheduler requests share token rotation; transient failures preserve the connection. Reading cached activity does not trigger a poll.
 
-Connecting X enables background import in this deployment. Disconnect stops future polls; an already running request may finish. Deleting local data removes observations and sync state along with the existing graph, waiting for an active background import so it cannot recreate deleted bookmarks. Grok enrichment, scouting, and following import remain separate explicit actions. Polling incurs X API reads even without an open browser.
+Connecting X enables background import in this deployment. Disconnect stops future polls; an already running request may finish. Deleting the account removes observations and sync state along with the existing graph, waiting for an active background import so it cannot recreate deleted bookmarks, and asks X to revoke the connection. Grok enrichment and scouting remain separate explicit actions. Stored follow edges still render. Sync does not call the following import. Polling incurs X API reads even without an open browser.
 
-The connected browser checks local activity every 30 seconds and refreshes the graph when observations change, without starting a second X poller. Use the HTTPS URL so OAuth cookies and callbacks share an origin.
+The connected browser checks local activity every 30 seconds and refreshes the graph when observations change, without starting a second X poller. Use the HTTPS URL so OAuth cookies and callbacks share an origin. On HTTPS, session and OAuth state cookies use the `__Host-` prefix (`__Host-stim_x_session`, `__Host-stim_x_oauth_state`) with Secure, Path=/, and no Domain. On HTTPS only those `__Host-` names authenticate. Unprefixed names are only for plain HTTP on localhost. Existing HTTPS users must sign in with X again after this update. Stored session rows from before the cutover are expired, so background import stops until they reconnect. Leftover expired rows keep their sealed payload so account delete can still revoke them. The poller retries revocation only. It must not import bookmarks for expired rows.
 
 ## Agent activity feed
 
@@ -43,12 +43,13 @@ This is an observation archive, not an exact bookmark event log. The first impor
 
 Preparation, tests, and the installed service do not read repository environment files. Credential loading is initially disabled. Do not grant a general exception to AGENTS.md merely to start the service.
 
-For one Mac, Keychain is the simpler store. The optional `lib/local-credentials.ts` runtime loader resolves three fixed generic-password items. The operator creates these in Keychain Access under the account running the service:
+For one Mac, Keychain is the simpler store. The optional `lib/local-credentials.ts` runtime loader resolves these fixed generic-password items. The operator creates these in Keychain Access under the account running the service:
 
 | Item name / service | Account | Value |
 | --- | --- | --- |
 | `net.stimgraph.X_CLIENT_ID` | `stimgraph` | X OAuth client ID |
 | `net.stimgraph.X_CLIENT_SECRET` | `stimgraph` | X OAuth client secret |
+| `net.stimgraph.STIMGRAPH_TOKEN_KEY` | `stimgraph` | 32-byte key that encrypts stored X tokens. `openssl rand -base64 32` |
 | `net.stimgraph.XAI_API_KEY` | `stimgraph` | Optional xAI key |
 | `net.stimgraph.TYPESAFE_API_KEY` | `stimgraph` | Optional TypeSafe AI key (Jev topic labeling) |
 
@@ -62,7 +63,13 @@ For stronger protection, run under a dedicated macOS service account with a revi
 
 SOPS with age is useful for encrypted Git configuration or deployment across hosts. A root `.sops.yaml` can contain non-secret creation rules and `secrets/stimgraph.enc.yaml` can contain ciphertext. Keep the private age identity outside the repository, readable only by the deployment identity, with a separate recovery copy. Do not keep it beside the ciphertext or automatically decrypt into an agent's shell/editor. An operator-controlled startup path can decrypt directly into the service environment. SOPS still requires runtime plaintext and does not protect against a process that can decrypt or modify the receiving code. SOPS has not been installed or configured here.
 
-The SQLite database contains private bookmark text and browser session identifiers. X access/refresh tokens are encrypted using the X client secret. Protect the database and backups as well as that secret; losing/changing the secret requires reconnecting. Enable FileVault and maintain an operator-controlled state backup.
+The SQLite database contains private bookmark text and browser session identifiers. X access/refresh tokens are encrypted with `STIMGRAPH_TOKEN_KEY`. Older rows sealed with the X client secret are re-encrypted with that key the next time they are read. Protect the database, its backups, and the token key. Losing or rotating the token key requires reconnecting accounts whose tokens were already re-sealed. Enable FileVault and maintain an operator-controlled state backup.
+
+A Cloudflare Worker deployment sets the same value as a secret, not in the repository:
+
+```bash
+wrangler secret put STIMGRAPH_TOKEN_KEY
+```
 
 ## Build and operate
 
@@ -74,6 +81,7 @@ cd .tailnet/source
 corepack pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
 NEXT_TELEMETRY_DISABLED=1 STIMGRAPH_BACKGROUND_POLL=false \
   X_CLIENT_ID=stimgraph-inert-test X_CLIENT_SECRET=stimgraph-inert-test-secret \
+  STIMGRAPH_TOKEN_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
   X_REDIRECT_URI=http://127.0.0.1:3012/api/auth/x/callback XAI_API_KEY= \
   NEXT_PUBLIC_SITE_URL=https://<host>.<tailnet>.ts.net \
   corepack pnpm@10.17.1 run build:local
@@ -115,6 +123,8 @@ node scripts/test-local.mjs
 ```
 
 The local integration test needs the Next.js production build and a free loopback port 3012. It tests startup polling without a browser, persistence/catch-up across restart, token refresh, access control, HTTPS cookies/origins, assets, and deletion. The separate `test-background.mjs` tests the Cloudflare build in Miniflare, including rate limits and concurrent refreshes.
+
+`scripts/bench-local.mjs` is a manual benchmark and is not part of CI. From the repository root, run `pnpm run build:local && node scripts/bench-local.mjs`. `BENCH_BOOKMARKS` sets the imported bookmark count, `BENCH_EXTRA_COPIES` duplicates those rows, `BENCH_RUNS` sets the timed requests per route, and `BENCH_TOP` adds the slowest SQL statements to the JSON report.
 
 - [Tailscale Serve and identity headers](https://tailscale.com/docs/features/tailscale-serve): loopback binding, private access, header sanitization, tagged devices.
 - [Tailscale Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve): persistent `--bg` and stopping a port.

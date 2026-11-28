@@ -19,6 +19,7 @@ const options = {
   host: '127.0.0.1', port: 0, log: new Log(LogLevel.ERROR),
   workers: [{ name: 'stimgraph', ...builtWorkerOptions(process.cwd()),
     bindings: { X_CLIENT_ID: 'stimgraph-inert-test', X_CLIENT_SECRET: 'stimgraph-inert-test-secret',
+      STIMGRAPH_TOKEN_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       X_REDIRECT_URI: `${origin}/api/auth/x/callback`, STIMGRAPH_TAILNET: 'true',
       STIMGRAPH_PUBLIC_ORIGIN: origin, STIMGRAPH_TAILNET_LOGIN: login, STIMGRAPH_BACKGROUND_POLL: 'true' },
     d1Databases: { DB: 'background-test' },
@@ -115,7 +116,7 @@ try {
   tokenFailure = false;
   tokenCalls = 0;
   await db.prepare('UPDATE bookmark_sync_state SET next_poll_at = 0').run();
-  const authenticated = { ...requestHeaders, Cookie: 'stim_x_session=fixture-session' };
+  const authenticated = { ...requestHeaders, Cookie: '__Host-stim_x_session=fixture-session' };
   await Promise.all([worker.scheduled(), request('/api/auth/x/status', authenticated)]);
   assert.equal(tokenCalls, 1, 'Browser and scheduler rotate a token only once');
   const xBeforeRead = calls;

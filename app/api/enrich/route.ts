@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { loadBookmarksForEnrichment, storeAiTopics } from '@/db/storage';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { enrichBookmarks } from '@/lib/xai-enrich';
@@ -39,10 +40,11 @@ export async function POST(request: NextRequest) {
         postId: item.post_id,
         topics: item.topics.slice(0, 4),
       }));
-    const topics = await storeAiTopics(active.session.profile.id, assignments);
+    const stored = await withLiveOwner(active.session.profile.id, () => storeAiTopics(active.session.profile.id, assignments));
+    if (!stored.live) return NextResponse.json({ error: stored.error }, { status: 401 });
     return withRenewedSession(NextResponse.json({
       analyzed: assignments.length,
-      topics,
+      topics: stored.value,
       estimatedCostUsd: Number(result.estimatedCostUsd.toFixed(4)),
       zeroDataRetention: result.zeroDataRetention,
     }), request, active.renewedCookie);

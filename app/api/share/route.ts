@@ -1,7 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { countSharesSince, saveShare } from '@/db/storage';
+import { countSharesSince, saveDemoShare, saveShare } from '@/db/storage';
 import { newShareId, parseCapsule } from '@/lib/capsule';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 
@@ -40,7 +41,12 @@ export async function POST(request: NextRequest) {
   }
 
   const id = newShareId();
-  await saveShare(id, ownerId, capsule);
+  if (!active) {
+    await saveDemoShare(id, ownerId, capsule);
+  } else {
+    const saved = await withLiveOwner(ownerId, () => saveShare(id, ownerId, capsule));
+    if (!saved.live) return NextResponse.json({ error: saved.error }, { status: 401 });
+  }
   const site = getRuntimeValue('NEXT_PUBLIC_SITE_URL') ?? request.nextUrl.origin;
   const url = `${site.replace(/\/$/, '')}/s/${id}`;
   const response = NextResponse.json({ id, url, name: capsule.name, nodes: capsule.nodes.length });

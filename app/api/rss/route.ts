@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { loadFeeds, loadLinkHosts, loadRecentFeedHosts, storeFeed } from '@/db/storage';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { DEMO_RSS_ORIGINS, originFromHost, probeOrigin, type FeedProbe } from '@/lib/rss-probe';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 
@@ -55,7 +56,13 @@ export async function POST(request: NextRequest) {
         for (let index = 0; index < hosts.length; index += 1) {
           const origin = hosts[index].startsWith('http') ? hosts[index] : originFromHost(hosts[index]);
           const probe = await probeOrigin(origin);
-          if (ownerId) await storeFeed(ownerId, probe);
+          if (ownerId) {
+            const saved = await withLiveOwner(ownerId, () => storeFeed(ownerId, probe));
+            if (!saved.live) {
+              send({ type: 'error', error: saved.error });
+              return;
+            }
+          }
           if (probe.status === 'found') found += 1;
           send({
             type: 'host',

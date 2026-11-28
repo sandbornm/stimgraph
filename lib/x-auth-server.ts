@@ -3,97 +3,141 @@ import { NextResponse } from 'next/server';
 import {
   deleteXSessionRecord,
   loadXSessionRecord,
-  replaceXSessionRecord,
+  resealXSessionRecord,
   saveXSessionRecord,
   X_SESSION_TTL_MS,
 } from '@/db/storage';
+import { withOwnerWork } from './owner-work';
 import { refreshXSession } from './x-api';
 import { refreshErrorAction } from './x-errors';
 import { requestOrigin } from './request-origin';
-import { openXSession, randomBase64Url, sealXSession, X_SESSION_COOKIE, type XSession } from './x-session';
+import { getRuntimeValue } from './runtime-env';
+import {
+  cookieWriteOptions,
+  hostnameFromOrigin,
+  readSessionCookie,
+  renewedSessionCookieWrites,
+  sessionCookieAttributes,
+  sessionCookieWrites,
+  stateCookieClearWrites,
+  stateCookieSet,
+  type CookieWrite,
+} from './session-cookie';
+import { resolvePresentedXSession, resolveStoredXSession, type StoredXSessionRow } from './x-session-resolve';
+import { tokenKeyUsable } from './x-session-seal';
+import { openXSession, sealXSession, type OpenedXSession, type XSession } from './x-session';
 
 const SESSION_MAX_AGE_SECONDS = Math.floor(X_SESSION_TTL_MS / 1000);
+const refreshing = new Map<string, Promise<{ session: XSession; renewedCookie?: string } | null>>();
 
 export function sessionCookieOptions(request: NextRequest) {
-  return {
-    httpOnly: true,
-    sameSite: 'lax' as const,
-    secure: requestOrigin(request).startsWith('https:'),
-    path: '/',
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  };
+  return sessionCookieAttributes(requestOrigin(request), SESSION_MAX_AGE_SECONDS);
+}
+
+function applyCookieWrites(response: NextResponse, request: NextRequest, writes: CookieWrite[]) {
+  const base = sessionCookieOptions(request);
+  for (const write of writes) {
+    response.cookies.set(write.name, write.value, { ...base, ...cookieWriteOptions(write) });
+  }
+  return response;
 }
 
 export function withRenewedSession(response: NextResponse, request: NextRequest, renewedCookie?: string) {
-  if (renewedCookie) {
-    response.cookies.set(X_SESSION_COOKIE, renewedCookie, sessionCookieOptions(request));
-  }
-  return response;
+  const options = sessionCookieOptions(request);
+  const read = readSessionCookie(request.cookies, options.secure);
+  return applyCookieWrites(response, request, renewedSessionCookieWrites({
+    secure: options.secure,
+    maxAge: options.maxAge,
+    presentedValue: read,
+    renewedValue: renewedCookie,
+    hostname: hostnameFromOrigin(requestOrigin(request)),
+  }));
 }
 
 export function clearSessionCookie(response: NextResponse, request: NextRequest) {
-  response.cookies.set(X_SESSION_COOKIE, '', { ...sessionCookieOptions(request), maxAge: 0 });
+  const options = sessionCookieOptions(request);
+  return applyCookieWrites(response, request, sessionCookieWrites({
+    secure: options.secure,
+    maxAge: options.maxAge,
+    clear: true,
+    hostname: hostnameFromOrigin(requestOrigin(request)),
+  }));
+}
+
+export function assignStateCookie(response: NextResponse, request: NextRequest, value: string) {
+  const options = sessionCookieOptions(request);
+  const state = stateCookieSet(options.secure);
+  response.cookies.set(state.name, value, { ...options, secure: state.secure, maxAge: state.maxAge });
   return response;
 }
 
-async function persistSession(session: XSession, sessionId?: string) {
-  const id = sessionId ?? randomBase64Url();
-  const payload = await sealXSession(session);
-  const expiresAt = Date.now() + X_SESSION_TTL_MS;
-  if (sessionId) {
-    await saveXSessionRecord(id, session.profile.id, payload, expiresAt);
-  } else {
-    await replaceXSessionRecord(id, session.profile.id, payload, expiresAt);
-  }
-  return id;
+export function clearOauthStateCookie(response: NextResponse, request: NextRequest) {
+  const options = sessionCookieOptions(request);
+  return applyCookieWrites(response, request, stateCookieClearWrites(
+    options.secure,
+    hostnameFromOrigin(requestOrigin(request)),
+  ));
 }
 
-async function refreshStoredSession(session: XSession, sessionId?: string) {
+async function persistSession(session: XSession, sessionId: string) {
+  const payload = await sealXSession(session);
+  const expiresAt = Date.now() + X_SESSION_TTL_MS;
+  await saveXSessionRecord(sessionId, session.profile.id, payload, expiresAt);
+  return sessionId;
+}
+
+async function migrateLegacyPayload(id: string, stored: StoredXSessionRow, opened: OpenedXSession) {
+  if (!opened.needsReseal || !tokenKeyUsable(getRuntimeValue)) return;
+  const payload = await sealXSession(opened.session);
+  await resealXSessionRecord(id, stored.ownerId, stored.payload, payload);
+}
+
+async function refreshStoredSession(session: XSession, sessionId: string) {
+  if (!tokenKeyUsable(getRuntimeValue)) return null;
   try {
     const refreshed = await refreshXSession(session);
     const id = await persistSession(refreshed, sessionId);
     return { session: refreshed, renewedCookie: id };
   } catch (error) {
     if (refreshErrorAction(error) === 'delete') {
-      if (sessionId) await deleteXSessionRecord(sessionId);
+      await deleteXSessionRecord(sessionId);
       return null;
     }
     throw error;
   }
 }
 
-const refreshing = new Map<string, Promise<{ session: XSession; renewedCookie?: string } | null>>();
+function storedSessionDeps(lockHeld: boolean) {
+  return {
+    lockHeld,
+    now: Date.now(),
+    keyUsable: tokenKeyUsable(getRuntimeValue),
+    load: (id: string) => loadXSessionRecord(id),
+    open: (payload: string) => openXSession(payload),
+    withLock: withOwnerWork,
+    migrate: (id: string, row: StoredXSessionRow, opened: OpenedXSession) => migrateLegacyPayload(id, row, opened),
+    refresh: (session: XSession, id: string) => refreshStoredSession(session, id),
+  };
+}
 
 export async function getStoredXSession(id: string) {
   const inFlight = refreshing.get(id);
   if (inFlight) return inFlight;
-  const operation = (async () => {
-    const stored = await loadXSessionRecord(id);
-    if (!stored) return null;
-    const session = await openXSession(stored.payload);
-    if (!session) return null;
-    if (session.expiresAt > Date.now() + 60_000) return { session };
-    return refreshStoredSession(session, id);
-  })();
+  const operation = resolveStoredXSession({ id, ...storedSessionDeps(false) });
   refreshing.set(id, operation);
   try { return await operation; } finally { refreshing.delete(id); }
 }
 
-export async function getActiveXSession(request: NextRequest): Promise<{
-  session: XSession;
-  renewedCookie?: string;
-} | null> {
-  const cookie = request.cookies.get(X_SESSION_COOKIE)?.value;
-  if (!cookie) return null;
+export async function getStoredXSessionLocked(id: string) {
+  return resolveStoredXSession({ id, ...storedSessionDeps(true) });
+}
 
-  if (cookie.includes('.')) {
-    const session = await openXSession(cookie);
-    if (!session) return null;
-    if (session.expiresAt > Date.now() + 60_000) {
-      return { session, renewedCookie: await persistSession(session) };
-    }
-    return refreshStoredSession(session);
-  }
-
-  return getStoredXSession(cookie);
+export async function getActiveXSession(request: NextRequest): Promise<{ session: XSession; renewedCookie?: string } | null> {
+  const options = sessionCookieOptions(request);
+  const cookie = readSessionCookie(request.cookies, options.secure);
+  return resolvePresentedXSession({
+    cookie,
+    keyUsable: tokenKeyUsable(getRuntimeValue),
+    loadStored: (id) => getStoredXSession(id),
+  });
 }

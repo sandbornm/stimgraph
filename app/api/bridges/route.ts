@@ -3,6 +3,7 @@ import { requestOrigin } from '@/lib/request-origin';
 import { NextResponse } from 'next/server';
 import { loadBridgeIndex, reserveBridgeRequest } from '@/db/bridges';
 import { findConceptBridges } from '@/lib/bridge-model';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { interpretConceptBridge } from '@/lib/xai-bridge';
@@ -31,7 +32,9 @@ export async function POST(request: NextRequest) {
     if (!index.nodes.has(from) || !index.nodes.has(to)) return respond({ error: 'One of these concepts is no longer in your collection. Refresh the map.' }, 404);
     const apiKey = getRuntimeValue('XAI_API_KEY');
     if (!apiKey) return respond({ error: 'Grok is not configured on this server. You can still explore routes from your saved posts.' }, 503);
-    if (!await reserveBridgeRequest(active.session.profile.id)) return respond({ error: 'Bridge requests are limited to one every 20 seconds and 12 per day per account. Try again later.' }, 429);
+    const reserved = await withLiveOwner(active.session.profile.id, () => reserveBridgeRequest(active.session.profile.id));
+    if (!reserved.live) return reply({ error: reserved.error }, 401);
+    if (!reserved.value) return respond({ error: 'Bridge requests are limited to one every 20 seconds and 12 per day per account. Try again later.' }, 429);
     const routes = findConceptBridges(index, from, to);
     const result = await interpretConceptBridge(index, from, to, routes, { apiKey });
     return respond({ ...result, routes });

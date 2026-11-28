@@ -1,5 +1,5 @@
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
-import { sql } from 'drizzle-orm';
+import { desc, sql } from 'drizzle-orm';
 
 export const accounts = sqliteTable('accounts', {
   id: text('id').primaryKey(),
@@ -28,8 +28,14 @@ export const bookmarks = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.ownerId, table.postId] }),
-    index('idx_bookmarks_owner_author').on(table.ownerId, table.authorId),
-    index('idx_bookmarks_owner_created').on(table.ownerId, table.createdAt),
+    index('idx_bookmarks_owner_recent').on(table.ownerId, desc(table.createdAt), desc(table.syncedAt)),
+    index('idx_bookmarks_owner_author_profile').on(
+      table.ownerId,
+      table.authorId,
+      table.authorUsername,
+      table.authorName,
+      table.authorProfileImageUrl,
+    ),
   ],
 );
 
@@ -212,3 +218,35 @@ export const backgroundHealth = sqliteTable('background_health', {
   id: integer('id').primaryKey(),
   heartbeatAt: integer('heartbeat_at').notNull(),
 }, (table) => [check('background_health_singleton', sql`${table.id} = 1`)]);
+
+export const deletedOwners = sqliteTable('deleted_owners', {
+  ownerId: text('owner_id').primaryKey(),
+  deletedAt: integer('deleted_at').notNull(),
+});
+
+export const EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER = 'expire_sessions_https_cookie_cutover';
+
+export const SCHEMA_EVENTS_CREATE_SQL = `CREATE TABLE IF NOT EXISTS schema_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  applied_at INTEGER NOT NULL
+)`;
+
+export const EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL =
+  `UPDATE x_sessions SET expires_at = 0 WHERE NOT EXISTS (
+    SELECT 1 FROM schema_events WHERE id = '${EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER}'
+  )`;
+
+export const EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL =
+  `INSERT OR IGNORE INTO schema_events (id, applied_at) VALUES ('${EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER}', ?)`;
+
+export const schemaEvents = sqliteTable('schema_events', {
+  id: text('id').primaryKey(),
+  appliedAt: integer('applied_at').notNull(),
+});
+
+export const pendingGrants = sqliteTable('pending_grants', {
+  id: text('id').primaryKey(),
+  payload: text('payload').notNull(),
+  ownerId: text('owner_id'),
+  createdAt: integer('created_at').notNull(),
+});

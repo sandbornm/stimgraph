@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { loadScoutContext, storeScouts } from '@/db/storage';
+import { withLiveOwner } from '@/lib/live-owner-bind';
 import { getRuntimeValue } from '@/lib/runtime-env';
 import { getActiveXSession, withRenewedSession } from '@/lib/x-auth-server';
 import { scoutNewContent } from '@/lib/xai-scout';
@@ -24,9 +25,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await scoutNewContent(context);
-    const stored = await storeScouts(active.session.profile.id, result.finds);
+    const stored = await withLiveOwner(active.session.profile.id, () => storeScouts(active.session.profile.id, result.finds));
+    if (!stored.live) return NextResponse.json({ error: stored.error }, { status: 401 });
     return withRenewedSession(NextResponse.json({
-      found: stored,
+      found: stored.value,
       finds: result.finds,
       estimatedCostUsd: Number(result.estimatedCostUsd.toFixed(4)),
       zeroDataRetention: result.zeroDataRetention,

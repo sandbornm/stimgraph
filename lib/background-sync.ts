@@ -1,22 +1,49 @@
 import { getD1 } from '@/db/index';
-import { ensureSchema, storeBookmarks } from '@/db/storage';
-import { getStoredXSession } from './x-auth-server';
+import { labelPendingBookmarks } from '@/db/jev';
+import {
+  deletePendingGrant,
+  deleteXSessionRecord,
+  ensureSchema,
+  loadExpiredXSessionRows,
+  loadPendingGrants,
+  POLL_LIVE_SESSIONS_SQL,
+  storeBookmarks,
+} from '@/db/storage';
+import { getStoredXSessionLocked } from './x-auth-server';
+import { tokenKeyUsable } from './x-session-seal';
 import { iterateXBookmarks } from './x-bookmarks';
 import { getRuntimeValue } from './runtime-env';
+import { revokeExpiredSessions, revokePendingGrants } from './revoke-expired-sessions';
 import { XRequestError } from './x-errors';
+import { revokeXSession } from './x-api';
+import { openXSession } from './x-session';
 import { BACKFILL_LIMIT, BACKFILL_PAGE_SIZE, POLL_INTERVAL_MS, POLL_LEASE_MS, nextPageStep, pollDelay } from './background-policy';
 import { withOwnerWork } from './owner-work';
-import { labelAfterSync } from './jev-sync';
 
 export async function pollConnectedAccounts() {
   if (getRuntimeValue('STIMGRAPH_BACKGROUND_POLL') !== 'true') return;
+  if (!tokenKeyUsable(getRuntimeValue)) return;
   await ensureSchema();
   const d1 = getD1();
   const now = Date.now();
   await d1.prepare(`INSERT INTO background_health(id, heartbeat_at) VALUES (1, ?)
     ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at`).bind(now).run();
-  const sessions = await d1.prepare(`SELECT id, owner_id FROM x_sessions
-    WHERE expires_at > ? ORDER BY updated_at DESC`).bind(now)
+  const openPayload = async (payload: string) => (await openXSession(payload))?.session ?? null;
+  await revokeExpiredSessions({
+    now,
+    loadExpired: loadExpiredXSessionRows,
+    withLock: withOwnerWork,
+    openPayload,
+    revoke: revokeXSession,
+    deleteRow: deleteXSessionRecord,
+  });
+  await revokePendingGrants({
+    loadPending: loadPendingGrants,
+    openPayload,
+    revoke: revokeXSession,
+    deleteRow: deletePendingGrant,
+  });
+  const sessions = await d1.prepare(POLL_LIVE_SESSIONS_SQL).bind(now)
     .all<{ id: string; owner_id: string }>();
   for (const stored of sessions.results) {
     await withOwnerWork(stored.owner_id, async () => {
@@ -31,7 +58,7 @@ export async function pollConnectedAccounts() {
       let fetched = 0;
       let continuation: string | null = claimed.continuation;
       try {
-        const active = await getStoredXSession(stored.id);
+        const active = await getStoredXSessionLocked(stored.id);
         if (!active) {
           await d1.prepare(`UPDATE bookmark_sync_state SET lease_until = 0, status = 'reconnect_required',
             next_poll_at = ? WHERE owner_id = ?`).bind(now + POLL_INTERVAL_MS, stored.owner_id).run();
@@ -60,7 +87,15 @@ export async function pollConnectedAccounts() {
           backfill_completed_at = COALESCE(backfill_completed_at, ?)
           WHERE owner_id = ?`).bind(Date.now(), Date.now() + POLL_INTERVAL_MS, fetched, continuation,
           backfillDone ? Date.now() : null, stored.owner_id).run();
-        await labelAfterSync(stored.owner_id);
+        const jevKey = getRuntimeValue('TYPESAFE_API_KEY');
+        if (jevKey) {
+          try {
+            const labeled = await labelPendingBookmarks(stored.owner_id, jevKey, { limit: 200 });
+            if (labeled.considered) console.info(`[stimgraph] jev labeled ${labeled.labeled}/${labeled.considered} (accepted ${labeled.accepted}, failed ${labeled.failed})`);
+          } catch (error) {
+            console.warn(`[stimgraph] jev labeling skipped: ${error instanceof Error ? error.name : 'error'}`);
+          }
+        }
       } catch (error) {
         const failures = claimed.failures + 1;
         const status = error instanceof XRequestError ? `x_${error.status}` : 'temporary_error';

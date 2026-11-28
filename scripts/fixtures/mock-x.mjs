@@ -3,10 +3,23 @@ if (process.env.X_CLIENT_ID !== 'stimgraph-local-test' || !process.env.STIMGRAPH
   throw new Error('Mock provider requires the isolated test environment.');
 }
 const original = globalThis.fetch;
+let refreshTokenRevoked = false;
+function revokeBody(body) {
+  if (typeof body === 'string') return new URLSearchParams(body);
+  if (body instanceof URLSearchParams) return body;
+  return new URLSearchParams();
+}
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
   if (url.hostname === 'api.x.com') {
     const scenario = JSON.parse(readFileSync(process.env.STIMGRAPH_TEST_SCENARIO, 'utf8'));
+    if (url.pathname === '/2/oauth2/revoke') {
+      if (scenario.revokeFailure) return Response.json({}, { status: scenario.revokeFailure });
+      const hint = revokeBody(init?.body).get('token_type_hint');
+      if (hint === 'refresh_token') refreshTokenRevoked = true;
+      if (hint === 'access_token' && refreshTokenRevoked) return Response.json({ error: 'invalid_token' }, { status: 400 });
+      return Response.json({ revoked: true });
+    }
     if (url.pathname === '/2/oauth2/token') return Response.json({ access_token: 'inert-refreshed', refresh_token: 'inert-rotated', expires_in: 7200 });
     if (scenario.failure) return Response.json({}, { status: scenario.failure, headers: { 'Retry-After': '900' } });
     const size = Number(url.searchParams.get('max_results'));
