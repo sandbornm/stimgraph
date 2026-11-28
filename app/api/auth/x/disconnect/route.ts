@@ -11,7 +11,7 @@ import { openXSession } from '@/lib/x-session';
 
 export async function POST(request: NextRequest) {
   const cookie = readSessionCookie(request.cookies, sessionCookieSecure(requestOrigin(request)));
-  const { revoked } = await disconnectPresentedSession({
+  const { revoked, clearCookie } = await disconnectPresentedSession({
     cookieValue: cookie,
     withLock: withOwnerWork,
     loadRow: loadXSessionPayload,
@@ -21,5 +21,6 @@ export async function POST(request: NextRequest) {
     expireRow: expireXSessionRecord,
   });
   const response = NextResponse.json({ disconnected: true, revoked });
+  if (!clearCookie) return response;
   return clearSessionCookie(response, request);
 }

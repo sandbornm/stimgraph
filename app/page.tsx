@@ -1433,6 +1433,7 @@ type ConnectionState = {
   connected: boolean;
   configured?: boolean;
   backgroundPolling?: boolean;
+  revocationPending?: boolean;
   profile?: { id: string; username: string; name: string; profileImageUrl?: string };
 };
 
@@ -1935,6 +1936,10 @@ export default function Home() {
         if (cancelled) return;
         if (shareId) setSharePath(`/s/${shareId}`);
         setConnection(status);
+        if (status.revocationPending) {
+          setPermissionsOpen(true);
+          setSelectedId(null);
+        }
 
         const graphPromise = status.connected
           ? timedFetch('/api/graph?scope=overview', { cache: 'no-store' })
@@ -2654,7 +2659,16 @@ export default function Home() {
   };
 
   const disconnect = async () => {
-    await fetch('/api/auth/x/disconnect', { method: 'POST' });
+    const response = await fetch('/api/auth/x/disconnect', { method: 'POST' });
+    const payload = await response.json().catch(() => null) as { revoked?: boolean } | null;
+    if (response.ok && payload?.revoked === false) {
+      setConnection((current) => ({ ...current, connected: false, revocationPending: true }));
+      setSelectedId(null);
+      setView('explore');
+      setPermissionsOpen(true);
+      return;
+    }
+    if (!response.ok) return;
     setConnection({ connected: false });
     setGraphNodes(demoNodes);
     setGraphEdges(demoEdges);
@@ -3076,14 +3090,18 @@ export default function Home() {
           ) : (
             <div className="permissions-panel">
               <span className="permission-icon">◇</span>
-              <p className="eyebrow">{mode === 'shared' ? 'SHARED MAP' : connection.connected ? 'X CONNECTED' : 'PERMISSIONS'}</p>
-              <h2>{mode === 'shared' ? (shareName ?? 'A shared map.') : connection.connected ? `Ready, @${connection.profile?.username}.` : 'Connect X to map your bookmarks.'}</h2>
-              <p>{mode === 'shared'
+              <p className="eyebrow">{connection.revocationPending ? 'X ACCESS' : mode === 'shared' ? 'SHARED MAP' : connection.connected ? 'X CONNECTED' : 'PERMISSIONS'}</p>
+              <h2>{connection.revocationPending ? 'X did not confirm revoking access.' : mode === 'shared' ? (shareName ?? 'A shared map.') : connection.connected ? `Ready, @${connection.profile?.username}.` : 'Connect X to map your bookmarks.'}</h2>
+              <p>{connection.revocationPending
+                ? 'Stimgraph will keep trying. You can also revoke Stimgraph in your X settings (Security and account access > Apps and sessions).'
+                : mode === 'shared'
                 ? 'People and topics only. Bookmark text is not in this link. Combine with the demo, or connect X and it will lay onto your map when you come back.'
                 : connection.connected
                 ? (connection.backgroundPolling ? 'Bookmarks sync in the background every six hours, even with this tab closed. This map refreshes automatically.' : 'Sync pulls bookmarks. Live watch of new saves is optional and off by default.')
                 : 'Read-only: bookmarks, posts, and profiles. It cannot post, like, follow, or change bookmarks.'}</p>
-              {connection.connected ? (
+              {connection.revocationPending ? (
+                <button className="wide-connect" type="button" onClick={disconnect}>Retry</button>
+              ) : connection.connected ? (
                 <button className="wide-connect" type="button" onClick={syncBookmarks} disabled={syncState === 'syncing'}>
                   {syncState === 'syncing'
                     ? (activity?.kind === 'sync' && activity.current != null
@@ -3144,7 +3162,7 @@ export default function Home() {
                 </section>
               ) : null}
 
-              {connection.connected || connection.configured === false ? (
+              {connection.connected || connection.revocationPending || connection.configured === false ? (
                 <section className="data-controls" aria-label="Local data controls">
                   <p className="eyebrow">DATA CONTROLS</p>
                   {connection.connected ? <button type="button" onClick={disconnect}>Disconnect browser session</button> : null}

@@ -223,3 +223,23 @@ export const deletedOwners = sqliteTable('deleted_owners', {
   ownerId: text('owner_id').primaryKey(),
   deletedAt: integer('deleted_at').notNull(),
 });
+
+export const EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER = 'expire_sessions_https_cookie_cutover';
+
+export const SCHEMA_EVENTS_CREATE_SQL = `CREATE TABLE IF NOT EXISTS schema_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  applied_at INTEGER NOT NULL
+)`;
+
+export const EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL =
+  `UPDATE x_sessions SET expires_at = 0 WHERE NOT EXISTS (
+    SELECT 1 FROM schema_events WHERE id = '${EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER}'
+  )`;
+
+export const EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL =
+  `INSERT OR IGNORE INTO schema_events (id, applied_at) VALUES ('${EXPIRE_SESSIONS_HTTPS_COOKIE_CUTOVER}', ?)`;
+
+export const schemaEvents = sqliteTable('schema_events', {
+  id: text('id').primaryKey(),
+  appliedAt: integer('applied_at').notNull(),
+});

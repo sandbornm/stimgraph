@@ -36,6 +36,10 @@ export const NON_OWNER_TABLES = [
     table: 'deleted_owners',
     reason: 'Retained so a sign-in started before the delete cannot recreate the account.',
   },
+  {
+    table: 'schema_events',
+    reason: 'One-time schema flags, not an owner account.',
+  },
 ] as const;
 
 function ident(value: string) {

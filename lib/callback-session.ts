@@ -20,6 +20,7 @@ export async function storeCallbackSession(input: {
   openPayload: (payload: string) => Promise<CallbackToken | null>;
   insert: (id: string, ownerId: string, payload: string, expiresAt: number) => Promise<unknown>;
   deleteRow: (id: string) => Promise<unknown>;
+  expireRow: (id: string) => Promise<unknown>;
   revoke: (session: CallbackToken) => Promise<boolean>;
 }): Promise<'stored' | 'rejected'> {
   if (await input.ownerDeletedSince(input.ownerId, input.pendingCreatedAt)) {
@@ -37,9 +38,13 @@ export async function storeCallbackSession(input: {
     try {
       previous = await input.openPayload(row.payload);
     } catch {
+      await input.expireRow(row.id);
       continue;
     }
-    if (!previous) continue;
+    if (!previous) {
+      await input.expireRow(row.id);
+      continue;
+    }
     if (previousGrantReused(previous, input.session)) {
       await input.deleteRow(row.id);
       continue;
@@ -48,9 +53,11 @@ export async function storeCallbackSession(input: {
     try {
       revoked = await input.revoke(previous);
     } catch {
+      await input.expireRow(row.id);
       continue;
     }
     if (revoked) await input.deleteRow(row.id);
+    else await input.expireRow(row.id);
   }
   return 'stored';
 }

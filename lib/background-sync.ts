@@ -1,11 +1,14 @@
 import { getD1 } from '@/db/index';
 import { labelPendingBookmarks } from '@/db/jev';
-import { ensureSchema, storeBookmarks } from '@/db/storage';
+import { deleteXSessionRecord, ensureSchema, loadExpiredXSessionRows, storeBookmarks } from '@/db/storage';
 import { getStoredXSessionLocked } from './x-auth-server';
 import { tokenKeyUsable } from './x-session-seal';
 import { iterateXBookmarks } from './x-bookmarks';
 import { getRuntimeValue } from './runtime-env';
+import { revokeExpiredSessions } from './revoke-expired-sessions';
 import { XRequestError } from './x-errors';
+import { revokeXSession } from './x-api';
+import { openXSession } from './x-session';
 import { BACKFILL_LIMIT, BACKFILL_PAGE_SIZE, POLL_INTERVAL_MS, POLL_LEASE_MS, nextPageStep, pollDelay } from './background-policy';
 import { withOwnerWork } from './owner-work';
 
@@ -17,6 +20,14 @@ export async function pollConnectedAccounts() {
   const now = Date.now();
   await d1.prepare(`INSERT INTO background_health(id, heartbeat_at) VALUES (1, ?)
     ON CONFLICT(id) DO UPDATE SET heartbeat_at = excluded.heartbeat_at`).bind(now).run();
+  await revokeExpiredSessions({
+    now,
+    loadExpired: loadExpiredXSessionRows,
+    withLock: withOwnerWork,
+    openPayload: async (payload) => (await openXSession(payload))?.session ?? null,
+    revoke: revokeXSession,
+    deleteRow: deleteXSessionRecord,
+  });
   const sessions = await d1.prepare(`SELECT id, owner_id FROM x_sessions
     WHERE expires_at > ? ORDER BY updated_at DESC`).bind(now)
     .all<{ id: string; owner_id: string }>();

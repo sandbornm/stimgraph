@@ -14,6 +14,11 @@ import {
 } from '@/lib/owner-deletions';
 import { ownerDeleteStatements } from '@/lib/owner-tables';
 import type { XProfile } from '@/lib/x-session';
+import {
+  EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL,
+  EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL,
+  SCHEMA_EVENTS_CREATE_SQL,
+} from './schema';
 
 export type StoredBookmark = {
   postId: string;
@@ -199,6 +204,9 @@ export async function ensureSchema() {
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_feeds_owner_status ON feeds(owner_id, status)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)'),
     d1.prepare('CREATE INDEX IF NOT EXISTS idx_x_sessions_owner ON x_sessions(owner_id)'),
+    d1.prepare(SCHEMA_EVENTS_CREATE_SQL),
+    d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_UPDATE_SQL),
+    d1.prepare(EXPIRE_UNPREFIXED_CUTOVER_INSERT_SQL).bind(Date.now()),
   ]);
   try {
     await d1.prepare('ALTER TABLE bookmark_sync_state ADD COLUMN backfill_completed_at INTEGER').run();
@@ -282,6 +290,15 @@ export async function loadXSessionRecord(id: string): Promise<{ payload: string;
   return { payload: row.payload, ownerId: row.owner_id, expiresAt: row.expires_at };
 }
 
+export async function loadXSessionPayloadState(id: string): Promise<{ payload: string; expiresAt: number } | null> {
+  await ensureSchema();
+  const row = await getD1().prepare(
+    'SELECT payload, expires_at FROM x_sessions WHERE id = ?',
+  ).bind(id).first<{ payload: string; expires_at: number }>();
+  if (!row) return null;
+  return { payload: row.payload, expiresAt: row.expires_at };
+}
+
 export async function deleteXSessionRecord(id: string) {
   await ensureSchema();
   await getD1().prepare('DELETE FROM x_sessions WHERE id = ?').bind(id).run();
@@ -314,6 +331,14 @@ export async function ownerHasSession(ownerId: string): Promise<boolean> {
     .bind(ownerId)
     .first<{ id: string }>();
   return Boolean(row);
+}
+
+export async function loadExpiredXSessionRows(now: number): Promise<{ id: string; ownerId: string; payload: string }[]> {
+  await ensureSchema();
+  const rows = await getD1().prepare(
+    `SELECT id, owner_id, payload FROM x_sessions WHERE expires_at <= ? AND payload != ''`,
+  ).bind(now).all<{ id: string; owner_id: string; payload: string }>();
+  return rows.results.map((row) => ({ id: row.id, ownerId: row.owner_id, payload: row.payload }));
 }
 
 function ownerDeletionDb(): OwnerDeletionDb {

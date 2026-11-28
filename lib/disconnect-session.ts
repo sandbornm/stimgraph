@@ -8,16 +8,16 @@ export async function disconnectPresentedSession<TSession extends RevocableSessi
   revoke: (session: TSession) => Promise<boolean>;
   deleteRow: (id: string) => Promise<unknown>;
   expireRow: (id: string) => Promise<unknown>;
-}): Promise<{ revoked: boolean }> {
+}): Promise<{ revoked: boolean; clearCookie: boolean }> {
   const cookie = input.cookieValue;
-  if (!cookie || cookie.includes('.')) return { revoked: false };
+  if (!cookie || cookie.includes('.')) return { revoked: false, clearCookie: true };
   const found = await input.loadRow(cookie);
-  if (!found) return { revoked: false };
+  if (!found) return { revoked: false, clearCookie: true };
   return input.withLock(found.ownerId, async () => {
     const row = await input.loadRow(cookie);
     if (!row) {
       await input.deleteRow(cookie);
-      return { revoked: false };
+      return { revoked: false, clearCookie: true };
     }
     let session: TSession | null = null;
     try {
@@ -27,7 +27,7 @@ export async function disconnectPresentedSession<TSession extends RevocableSessi
     }
     if (!session) {
       await input.expireRow(cookie);
-      return { revoked: false };
+      return { revoked: false, clearCookie: false };
     }
     let revoked = false;
     try {
@@ -37,9 +37,9 @@ export async function disconnectPresentedSession<TSession extends RevocableSessi
     }
     if (revoked) {
       await input.deleteRow(cookie);
-      return { revoked: true };
+      return { revoked: true, clearCookie: true };
     }
     await input.expireRow(cookie);
-    return { revoked: false };
+    return { revoked: false, clearCookie: false };
   });
 }

@@ -112,6 +112,9 @@ test('a callback pending from before the delete is rejected from the stored tomb
     deleteRow: async () => {
       throw new Error('deleted');
     },
+    expireRow: async () => {
+      throw new Error('expired');
+    },
     revoke: async (session) => {
       assert.equal(session.refreshToken, 'refresh-old');
       return true;
@@ -135,6 +138,9 @@ test('a callback pending from before the delete is rejected from the stored tomb
     },
     deleteRow: async () => {
       throw new Error('deleted');
+    },
+    expireRow: async () => {
+      throw new Error('expired');
     },
     revoke: async () => {
       throw new Error('revoked new');

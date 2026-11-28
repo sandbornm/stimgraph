@@ -135,6 +135,9 @@ test('a callback write either lands before delete loads payloads or after delete
       deleteRow: async () => {
         throw new Error('deleted');
       },
+      expireRow: async () => {
+        throw new Error('expired');
+      },
       revoke: async (session) => {
         newRevoked.push(session.refreshToken ?? '');
         return true;
@@ -169,6 +172,7 @@ test('a callback write either lands before delete loads payloads or after delete
   assert.match(locked, /loadOwnerXSessionRows/);
   assert.match(locked, /insertXSessionRecord/);
   assert.match(locked, /deleteXSessionRecord/);
+  assert.match(locked, /expireXSessionRecord/);
   assert.equal(locked.includes('replaceXSessionRecord'), false);
   assert.equal(locked.includes('loadOwnerXSessionPayloads'), false);
   assert.match(locked, /ownerDeletedSince/);
@@ -236,6 +240,9 @@ test('a sign-in started after the delete is stored normally', async () => {
     deleteRow: async () => {
       throw new Error('deleted');
     },
+    expireRow: async () => {
+      throw new Error('expired');
+    },
     revoke: async () => {
       throw new Error('new grant revoked');
     },
@@ -267,6 +274,9 @@ test('a deletion at the pending row time revokes the new grant and stores nothin
     },
     deleteRow: async () => {
       throw new Error('deleted');
+    },
+    expireRow: async () => {
+      throw new Error('expired');
     },
     revoke: async (session) => {
       assert.equal(session.refreshToken, 'refresh-eq');
@@ -310,6 +320,9 @@ test('an unconfigured delete blocks a sign-in that started earlier', async () =>
     deleteRow: async () => {
       throw new Error('deleted');
     },
+    expireRow: async () => {
+      throw new Error('expired');
+    },
     revoke: async (session) => {
       revoked.push(session.refreshToken ?? '');
       throw new Error('revoke down');
@@ -321,14 +334,14 @@ test('an unconfigured delete blocks a sign-in that started earlier', async () =>
 });
 
 test('a previous row is removed only after X confirms revocation', async () => {
-  const rows = [
-    { id: 'row-revoked', payload: 'sealed-old' },
-    { id: 'row-revoke-false', payload: 'sealed-false' },
-    { id: 'row-revoke-throws', payload: 'sealed-throws' },
-    { id: 'row-closed', payload: 'sealed-closed' },
-    { id: 'row-unopenable', payload: 'sealed-unopenable' },
-    { id: 'row-same-refresh', payload: 'sealed-same-refresh' },
-    { id: 'row-same-access', payload: 'sealed-same-access' },
+  const rows: { id: string; payload: string; expiresAt: number }[] = [
+    { id: 'row-revoked', payload: 'sealed-old', expiresAt: 40 },
+    { id: 'row-revoke-false', payload: 'sealed-false', expiresAt: 40 },
+    { id: 'row-revoke-throws', payload: 'sealed-throws', expiresAt: 40 },
+    { id: 'row-closed', payload: 'sealed-closed', expiresAt: 40 },
+    { id: 'row-unopenable', payload: 'sealed-unopenable', expiresAt: 40 },
+    { id: 'row-same-refresh', payload: 'sealed-same-refresh', expiresAt: 40 },
+    { id: 'row-same-access', payload: 'sealed-same-access', expiresAt: 40 },
   ];
   const opened: Record<string, CallbackToken | null> = {
     'sealed-old': { accessToken: 'access-old', refreshToken: 'refresh-old' },
@@ -348,12 +361,12 @@ test('a previous row is removed only after X confirms revocation', async () => {
     payload: 'sealed-new',
     expiresAt: 50,
     ownerDeletedSince: () => false,
-    loadRows: async () => rows.map((row) => ({ ...row })),
+    loadRows: async () => rows.map((row) => ({ id: row.id, payload: row.payload })),
     openPayload: async (payload) => {
       if (payload === 'sealed-unopenable') throw new Error('sealed');
       return opened[payload] ?? null;
     },
-    insert: async (id, ownerId, payload) => {
+    insert: async (id, ownerId, payload, expiresAt) => {
       assert.equal(stored, false);
       assert.equal(ownerId, 'callback-confirm-revoke');
       assert.deepEqual(rows.map((row) => row.id), [
@@ -365,7 +378,7 @@ test('a previous row is removed only after X confirms revocation', async () => {
         'row-same-refresh',
         'row-same-access',
       ]);
-      rows.push({ id, payload });
+      rows.push({ id, payload, expiresAt });
       stored = true;
     },
     deleteRow: async (id) => {
@@ -373,6 +386,13 @@ test('a previous row is removed only after X confirms revocation', async () => {
       const index = rows.findIndex((row) => row.id === id);
       assert.ok(index >= 0);
       rows.splice(index, 1);
+    },
+    expireRow: async (id) => {
+      assert.equal(stored, true);
+      const row = rows.find((item) => item.id === id);
+      assert.ok(row);
+      assert.notEqual(id, 'sid-new');
+      row.expiresAt = 0;
     },
     revoke: async (session) => {
       assert.equal(stored, true);
@@ -385,10 +405,10 @@ test('a previous row is removed only after X confirms revocation', async () => {
   assert.equal(outcome, 'stored');
   assert.deepEqual(revoked, ['refresh-old', 'refresh-false', 'refresh-throws']);
   assert.deepEqual(rows, [
-    { id: 'row-revoke-false', payload: 'sealed-false' },
-    { id: 'row-revoke-throws', payload: 'sealed-throws' },
-    { id: 'row-closed', payload: 'sealed-closed' },
-    { id: 'row-unopenable', payload: 'sealed-unopenable' },
-    { id: 'sid-new', payload: 'sealed-new' },
+    { id: 'row-revoke-false', payload: 'sealed-false', expiresAt: 0 },
+    { id: 'row-revoke-throws', payload: 'sealed-throws', expiresAt: 0 },
+    { id: 'row-closed', payload: 'sealed-closed', expiresAt: 0 },
+    { id: 'row-unopenable', payload: 'sealed-unopenable', expiresAt: 0 },
+    { id: 'sid-new', payload: 'sealed-new', expiresAt: 50 },
   ]);
 });

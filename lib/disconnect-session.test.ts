@@ -48,7 +48,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
       expired.push(id);
     },
   });
-  assert.deepEqual(outcome, { revoked: true });
+  assert.deepEqual(outcome, { revoked: true, clearCookie: true });
   assert.deepEqual(opened, ['sealed-fresh']);
   assert.deepEqual(revoked, ['refresh-expired']);
   assert.deepEqual(deleted, ['opaque-expired']);
@@ -76,7 +76,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
       if (row) row.expiresAt = 0;
     },
   });
-  assert.deepEqual(failed, { revoked: false });
+  assert.deepEqual(failed, { revoked: false, clearCookie: false });
   assert.deepEqual(failedExpired, ['opaque-expired']);
   assert.equal(rows.get('opaque-expired')?.expiresAt, 0);
   assert.equal(rows.has('opaque-expired'), true);
@@ -103,7 +103,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
       if (row) row.expiresAt = 0;
     },
   });
-  assert.deepEqual(thrown, { revoked: false });
+  assert.deepEqual(thrown, { revoked: false, clearCookie: false });
   assert.deepEqual(thrownExpired, ['opaque-expired']);
   assert.equal(rows.has('opaque-expired'), true);
   assert.equal(rows.get('opaque-expired')?.expiresAt, 0);
@@ -132,7 +132,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
       if (row) row.expiresAt = 0;
     },
   });
-  assert.deepEqual(closed, { revoked: false });
+  assert.deepEqual(closed, { revoked: false, clearCookie: false });
   assert.deepEqual(closedExpired, ['opaque-closed']);
   assert.equal(rows.has('opaque-closed'), true);
   assert.equal(rows.get('opaque-closed')?.expiresAt, 0);
@@ -161,7 +161,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
     },
   });
   assert.equal(dottedLoads, 0);
-  assert.deepEqual(dotted, { revoked: false });
+  assert.deepEqual(dotted, { revoked: false, clearCookie: true });
 
   const missing = await disconnectPresentedSession({
     cookieValue: undefined,
@@ -184,7 +184,7 @@ test('disconnect revokes the presented row under the owner lock, including an ex
       throw new Error('expired');
     },
   });
-  assert.deepEqual(missing, { revoked: false });
+  assert.deepEqual(missing, { revoked: false, clearCookie: true });
 
   const storage = readFileSync(join(root, 'db/storage.ts'), 'utf8');
   const body = storage.slice(storage.indexOf('export async function loadXSessionPayload'), storage.indexOf('export async function loadXSessionRecord'));
@@ -211,5 +211,8 @@ test('disconnect revokes the presented row under the owner lock, including an ex
   assert.match(route, /revokeXSession/);
   assert.match(route, /withOwnerWork/);
   assert.match(route, /\{ disconnected: true, revoked \}/);
+  assert.match(route, /const \{ revoked, clearCookie \} = await disconnectPresentedSession\(/);
+  assert.match(route, /if \(!clearCookie\) return response;/);
+  assert.match(route, /return clearSessionCookie\(response, request\);/);
   assert.equal(route.includes('if (revoked)'), false);
 });

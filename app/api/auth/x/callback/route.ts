@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { deleteXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
+import { deleteXSessionRecord, expireXSessionRecord, insertXSessionRecord, loadOwnerXSessionRows, ownerDeletedSince, takeOauthPending, X_SESSION_TTL_MS } from '@/db/storage';
 import { storeCallbackSession } from '@/lib/callback-session';
 import { withOwnerWork } from '@/lib/owner-work';
 import { readStateCookie, sessionCookieSecure } from '@/lib/session-cookie';
@@ -96,6 +96,7 @@ export async function GET(request: NextRequest) {
       openPayload: async (sealed) => (await openXSession(sealed))?.session ?? null,
       insert: insertXSessionRecord,
       deleteRow: deleteXSessionRecord,
+      expireRow: expireXSessionRecord,
       revoke: revokeXSession,
     }));
     if (stored === 'rejected') {
